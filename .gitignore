@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual environments
+.venv/
+venv/
+
+# Build / distribution
+build/
+dist/
+*.egg-info/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code local machinery (not part of the repo deliverable)
+.agents/
+.claude/worktrees/
+
+# Scratch / draft tests that predate the current API surface
+tests/
+
+# uv lockfile (not currently tracked — uncomment to track for reproducibility)
+uv.lock

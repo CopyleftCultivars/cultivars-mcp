@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "evee": {
+      "command": "uv",
+      "args": ["run", "--directory", "/Users/mark/projects/evee", "python3", "server.py"]
+    }
+  }
+}
