@@ -3,7 +3,7 @@
 Complete reference for grower-scientists, breeders, and natural-farming
 researchers using Cultivars to query the open plant-genomics commons.
 
-**Quick links:** [Quick Start](#quick-start) · [Tool reference](#tool-reference) · [Workflow recipes](#workflow-recipes) · [Species coverage](#species-coverage) · [Trait atlas](#trait-atlas) · [FAQ](#faq) · [Glossary](#glossary)
+**Quick links:** [Quick Start](#quick-start) · [Tool reference](#tool-reference) · [Workflow recipes (by persona)](#workflow-recipes) · [Species coverage](#species-coverage) · [Trait atlas](#trait-atlas) · [Troubleshooting](#troubleshooting) · [FAQ](#faq) · [Glossary](#glossary)
 
 ---
 
@@ -337,7 +337,11 @@ Subpopulations: `"Stiff Stalk"`, `"Non-Stiff Stalk"`, `"Tropical / Subtropical"`
 
 ## Workflow recipes
 
-### Recipe 1: "Is my hemp cultivar safely Type III?"
+Recipes are organized by **user persona**. Find your role below; each section has the recipes most relevant to that kind of work. Recipes show the tool calls; an LLM agent uses them to assemble a natural-language answer.
+
+### 🌿 For cannabis & hemp growers / breeders
+
+#### Recipe 1: "Is my hemp cultivar safely Type III?"
 
 ```
 1. lookup_kannapedia_strain(rsp_id="13534")
@@ -350,7 +354,29 @@ Subpopulations: `"Stiff Stalk"`, `"Non-Stiff Stalk"`, `"Tropical / Subtropical"`
    → newest published evidence on the chemotype-determining locus
 ```
 
-### Recipe 2: "Translate Arabidopsis drought genes into my crop"
+#### Recipe 2: "Compare three cannabis strains I'm thinking of breeding from"
+
+```
+compare_cannabis_strains(rsp_ids=["13536", "13534", "10837"])
+# Returns chemotype distribution, rarity, and genes flagged on multiple strain pages
+# — surfaces the variant patterns they share, in one call.
+```
+
+#### Recipe 2b: "What does the cannabinoid biosynthesis pathway look like at the molecular level?"
+
+```
+1. find_trait_genes(trait="cannabinoid_biosynthesis")
+   → CsAAE1 → OLS → OAC → CsPT4 → THCAS / CBDAS / CBCAS (7-enzyme pathway)
+2. lookup_uniprot_entry(uniprot_id="Q8GTB6")  # THCAS
+   → "Tetrahydrocannabinolic acid synthase", EC 1.21.3.7, FAD cofactor, reaction
+     CBGA + O2 → THCA + H2O2, with 7 PubMed citations including Sirikantaramas 2004
+3. lookup_uniprot_entry(uniprot_id="A6P6V9")  # CBDAS
+   → Curated function statement + Taura 2007 citation
+```
+
+### 🌽 For heritage corn / maize growers + breeders
+
+#### Recipe 3: "Translate Arabidopsis drought genes into my crop"
 
 ```
 translate_trait_to_species(trait="drought_tolerance", target_species="sorghum_bicolor")
@@ -358,7 +384,7 @@ translate_trait_to_species(trait="drought_tolerance", target_species="sorghum_bi
 # Each gene tagged with evidence_tier, characterized_in species, and primary_ref.
 ```
 
-### Recipe 3: "What heritage maize lines should I cross with?"
+#### Recipe 4: "What heritage maize lines should I cross with?"
 
 ```
 1. list_maize_nam_founders(subpopulation="Tropical / Subtropical")
@@ -369,7 +395,9 @@ translate_trait_to_species(trait="drought_tolerance", target_species="sorghum_bi
    → Mir1-CP (Pechan 2000 PMID 10899972) — non-Bt fall armyworm resistance
 ```
 
-### Recipe 4: "Genetic basis of mycorrhizal symbiosis"
+### 🌾 For natural-farming / regenerative researchers
+
+#### Recipe 5: "Genetic basis of mycorrhizal symbiosis"
 
 ```
 1. find_trait_genes(trait="mycorrhizal_symbiosis")
@@ -381,15 +409,7 @@ translate_trait_to_species(trait="drought_tolerance", target_species="sorghum_bi
 4. lookup_uniprot_entry on each curated partner for full function statements
 ```
 
-### Recipe 5: "Compare three cannabis strains I'm thinking of breeding from"
-
-```
-compare_cannabis_strains(rsp_ids=["13536", "13534", "10837"])
-# Returns chemotype distribution, rarity, and genes flagged on multiple strain pages
-# — surfaces the variant patterns they share, in one call.
-```
-
-### Recipe 6: "What's the latest on PSTOL1 (rice P-uptake)?"
+#### Recipe 6: "What's the latest on PSTOL1 (rice P-uptake) for low-P soils?"
 
 ```
 1. find_trait_genes(trait="phosphorus_uptake")
@@ -398,6 +418,28 @@ compare_cannabis_strains(rsp_ids=["13536", "13534", "10837"])
    → UniProt cross-refs + 4 GO terms
 3. search_pubmed_for_gene(query="PSTOL1 rice Kasalath phosphorus")
    → newest papers, citation counts, open-access flags
+```
+
+#### Recipe 7: "What stress-tolerance loci could I look at in a sorghum landrace from a dry region?"
+
+```
+1. find_trait_genes(trait="drought_tolerance", target_species="sorghum_bicolor")
+2. find_trait_genes(trait="aluminum_tolerance", target_species="sorghum_bicolor")
+   → If you're growing on acidic tropical soils, this matters as much as drought
+3. find_trait_genes(trait="heat_tolerance", target_species="sorghum_bicolor")
+4. For each canonical gene of interest, get_orthologs to translate to sorghum,
+   then search_pubmed_for_gene to find the newest sorghum-specific literature
+```
+
+#### Recipe 8: "I want to understand how my legume cover crop fixes nitrogen — what genes are involved?"
+
+```
+1. find_trait_genes(trait="rhizobial_nodulation")
+   → 5 SYM-pathway genes from Medicago truncatula (the model legume): NFP, LYK3, NIN, ERN1, NSP1
+2. find_trait_genes(trait="mycorrhizal_symbiosis")
+   → The SYM pathway is SHARED upstream between rhizobial nodulation and AM symbiosis
+3. lookup_uniprot_entry(uniprot_id="<UniProt ID from atlas>")  # for each
+4. lookup_gene_evidence + get_string_interactions for the central kinase (CCaMK/DMI3)
 ```
 
 ---
@@ -479,6 +521,98 @@ Most other Ensembl Plants species. `search_variants_in_region` returns `[]` for 
 - `maize_quality_protein` — Opaque-2, Floury-2
 - `maize_disease_resistance` — Ht1, Htn1, Rcg1
 - `maize_pest_resistance` — Mir1-CP
+
+---
+
+## Troubleshooting
+
+### "Claude Code says no MCP server is loaded"
+
+Usually one of:
+- You're not in the project directory. `cd` to the cloned repo and re-launch `claude`.
+- You ran `git clone` but haven't run `uv sync` yet. The MCP can't start without dependencies installed.
+- Permission prompt: the first time Claude Code sees `.mcp.json`, it asks before enabling the server. Approve the prompt.
+- Check `claude` is actually picking up `.mcp.json` — `claude /mcp` from inside Claude Code lists registered MCP servers; `cultivars` should appear.
+
+### "Claude Desktop doesn't see the MCP after I edit config"
+
+Restart Claude Desktop completely (`Cmd-Q` / `Alt-F4` then relaunch — `Cmd-R` reload isn't enough). The MCP config is read at process start.
+
+### "Ensembl returned 503 / timed out"
+
+Ensembl has scheduled-maintenance windows (Tuesdays for some indices) and occasional REST backend load spikes. The tool's built-in retry helper handles 429 + 503 transients with `Retry-After` backoff. If it's persistent:
+- Check https://rest.ensembl.org/info/ping for service status
+- Wait a few minutes and retry
+- The retry budget is 3 attempts per request — after that the tool surfaces the error
+
+### "EuropePMC returned 503"
+
+Same pattern as Ensembl — transient infrastructure load. The tool now has Retry-After backoff (added in the same docs round). Wait and retry. We observed this in real-time during the integration testing; the second attempt succeeded.
+
+### "STRING-db returned 400"
+
+STRING returns 400 when it can't map your identifier to a protein in the requested species. Common cases:
+- The gene symbol uses an alias STRING doesn't have. Try a stable ID instead.
+- The species (NCBI taxon ID) doesn't have that protein in STRING's database. STRING covers ~16,000 species but coverage varies — Cannabis is supported (taxon 3483), but not every cannabis protein is mapped.
+- Try a different identifier form: STRING accepts symbol, UniProt ID, or its own `species.proteinId` form (e.g., `3702.AT2G18790` for Arabidopsis PHYB).
+
+### "Cannabis lookup returns empty"
+
+Cannabis sativa **is not in Ensembl Plants**. This is documented and intentional — every tool with a `species` argument checks for `cannabis_sativa` and returns a structured fallback pointing at:
+- `lookup_kannapedia_strain` for strain-level live data
+- `lookup_uniprot_entry` for cannabis protein curation
+- `find_trait_genes(trait="cannabinoid_biosynthesis"...)` for the literature-handle atlas
+
+If you want a specific cannabis gene by symbol (e.g., "THCAS"), use `lookup_uniprot_entry(uniprot_id="Q8GTB6")` directly — UniProt has it curated.
+
+### "Kannapedia strain lookup says 'Strain not found'"
+
+Verify the RSP ID. Kannapedia IDs are numeric and range from ~rsp1 to current. Browse https://www.kannapedia.net/strains to discover IDs. The tool accepts both forms: `rsp13536` or `13536`.
+
+### "find_trait_genes returns 'trait not in atlas'"
+
+The atlas is a curated map, not exhaustive. If your trait isn't there:
+- Call `list_trait_categories` to see what's available
+- The tool does loose matching — `"drought"` → `drought_tolerance`, `"hemp"` → matches multiple — so try a shorter or longer form
+- If the trait is truly absent, find the seminal gene from primary literature and use `lookup_gene` directly. The atlas adds categories in response to community contributions (see [CONTRIBUTING.md](../CONTRIBUTING.md)).
+
+### "An atlas gene's `evidence` field is `null`"
+
+Two reasons:
+- The gene is a **literature handle** — known from primary literature but not symbol-indexed in Ensembl (barley HVA1, sorghum SbMATE, rice SK1/SK2). The atlas marks these with a `note` field. Use the cited paper as the evidence trail.
+- The atlas evidence file (`atlas_evidence.json`) is stale relative to a newly-added atlas gene. The `test_atlas_evidence_drift_warning` pytest catches this. Regenerate via `python evals/atlas_audit.py`.
+
+### "Hexaploid wheat (Triticum aestivum) returns multiple orthologs for one gene"
+
+Bread wheat is hexaploid (AABBDD subgenomes). A gene like VRN-A1 has homoeologs at VRN-A1, VRN-B1, and VRN-D1. Ensembl Compara returns all three when you query "TaVRN1" or similar. **This is correct, not a bug.** Look at the `taxonomy_level` field — homoeolog matches come at deep nodes (Triticeae) while one2one orthologs come at shallow nodes.
+
+### "Variant search returns empty for my species"
+
+Variation coverage is wildly uneven across plant species:
+- **Arabidopsis** (1001 Genomes) → ~12M variants
+- **Rice** (3K Rice Genomes) → millions
+- **Tomato, grape, wheat, maize** → partial
+- **Most other crops** → no variation database; you get `[]`
+
+The tool surfaces this in the `species_quality` field of the response — `"tier": "gene_models_only"` means there's no curated variation database. This is a data gap, not a tool failure.
+
+### "PubMed search returns ancient-only results"
+
+EuropePMC results are ranked by relevance by default, which can surface older highly-cited papers. To filter to recent literature:
+- Add the year explicitly to the query: `"DREB1A drought 2024 OR 2025 OR 2026"`
+- Use the `cited_by_count` field in results to prioritize impact (with the caveat that recent papers haven't had time to accumulate citations)
+- For specific date filtering, see Europe PMC's [advanced search syntax](https://europepmc.org/Help#search-tips) — pass query directly
+
+### "Concurrent calls are hitting rate limits"
+
+The internal `_get_with_retry` helper handles 429s automatically. If you're orchestrating many parallel calls externally (more than the tool already does internally):
+- `translate_trait_to_species` already caps internal concurrency at 6 workers
+- `compare_cannabis_strains` caps at 5
+- If you're seeing rate limits, reduce concurrency at the agent level
+
+### "My test passes locally but fails in CI"
+
+Check Python version compatibility — the CI matrix runs 3.10 / 3.11 / 3.12. Some `httpx.MockTransport` behaviors differ slightly between Python minor versions.
 
 ---
 

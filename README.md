@@ -4,9 +4,27 @@
 
 Part of the [Copyleft Cultivars](https://github.com/CopyleftCultivars) ecosystem alongside [TinyLLamaFarmer](https://github.com/CopyleftCultivars/TinyLLamaFarmer) (offline natural-farming AI) and [gemma4-natural-farming](https://huggingface.co/CopyleftCultivars/gemma4-natural-farming-gguf) (open-weight KNF/JADAM model).
 
-→ For human readers: see **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)**
-→ For an accessible introduction: see **[docs/PATREON_INTRO.md](docs/PATREON_INTRO.md)**
-→ For lineage notes from the upstream fork: see **[FORK_NOTES.md](FORK_NOTES.md)**
+| | |
+|---|---|
+| 👥 **Audience guide** (Patreon members, non-technical) | [docs/PATREON_INTRO.md](docs/PATREON_INTRO.md) |
+| 📖 **User guide** (full reference + recipes) | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) |
+| 🔧 **Contributing** (add traits, regenerate audits) | [CONTRIBUTING.md](CONTRIBUTING.md) |
+| 📜 **License** (Apache 2.0) | [LICENSE](LICENSE) |
+| 🪞 **Lineage from upstream fork** | [FORK_NOTES.md](FORK_NOTES.md) |
+| 🧾 **Changelog** | [CHANGELOG.md](CHANGELOG.md) |
+
+## Table of contents
+
+- [What it does](#what-it-does)
+- [The trait atlas (30 categories, 123 genes, 73% UniProt-curated)](#the-trait-atlas-30-categories-123-genes-73-uniprot-curated)
+- [Honest framings](#honest-framings-per-copyleft-cultivars-mission)
+- [Veracity verification](#veracity-verification)
+- [Testing & CI](#testing--ci)
+- [Installation](#usage)
+- [Example workflows](#example-workflows-see-user_guidemd-for-full-recipes)
+- [Skill (for Claude Code agents)](#skill)
+- [Data sources](#data-sources)
+- [License & lineage](#license--lineage)
 
 ---
 
