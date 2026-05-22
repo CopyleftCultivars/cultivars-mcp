@@ -616,6 +616,141 @@ def test_translate_trait_handles_literature_handles(install_handler):
     assert "translations" in out
 
 
+# ---------------------------------------------------------------------------
+# lookup_gene_evidence — veracity backbone
+# ---------------------------------------------------------------------------
+
+
+def _xref_response(swissprot: list[str] = None, sptrembl: list[str] = None, go_count: int = 0, pdb: list[str] = None, reactome: list[tuple[str, str]] = None):
+    """Build a fake /xrefs/id response with given annotations."""
+    out = []
+    for pid in (swissprot or []):
+        out.append({"primary_id": pid, "display_id": f"{pid}.1", "description": "test protein", "info_type": "SEQUENCE_MATCH", "dbname": "Uniprot/SWISSPROT"})
+    for pid in (sptrembl or []):
+        out.append({"primary_id": pid, "display_id": pid, "description": None, "info_type": "DEPENDENT", "dbname": "Uniprot/SPTREMBL"})
+    for _ in range(go_count):
+        out.append({"primary_id": "GO:0000001", "display_id": "GO:0000001", "description": "test", "info_type": "DEPENDENT", "dbname": "GO"})
+    for pdb_id in (pdb or []):
+        out.append({"primary_id": pdb_id, "display_id": pdb_id, "description": None, "info_type": "DEPENDENT", "dbname": "PDB"})
+    for rid, name in (reactome or []):
+        out.append({"primary_id": rid, "display_id": name, "description": None, "info_type": "DIRECT", "dbname": "Plant_Reactome_Pathway"})
+    return out
+
+
+def test_lookup_gene_evidence_high_curated(install_handler):
+    install_handler(lambda req: _json(_xref_response(
+        swissprot=["P14713"], go_count=88, pdb=["4OUR", "7RZW"],
+        reactome=[("R-ATH-8934036", "Circadian rhythm")]
+    )))
+    out = server.lookup_gene_evidence(stable_id="AT2G18790")
+    assert out["evidence_tier"] == "high_curated"
+    assert out["uniprot_curated"][0]["id"] == "P14713"
+    assert out["uniprot_lookup_url"] == "https://www.uniprot.org/uniprotkb/P14713"
+    assert out["go_term_count"] == 88
+    assert len(out["pdb_structures"]) == 2
+    assert len(out["plant_reactome_pathways"]) == 1
+
+
+def test_lookup_gene_evidence_moderate_tier(install_handler):
+    install_handler(lambda req: _json(_xref_response(
+        sptrembl=["A0A0A0KQ23"], go_count=15
+    )))
+    out = server.lookup_gene_evidence(stable_id="Os09g0286600")
+    assert out["evidence_tier"] == "moderate_auto_annotated"
+    assert out["uniprot_curated"] == []
+    assert len(out["uniprot_auto"]) == 1
+
+
+def test_lookup_gene_evidence_low_tier(install_handler):
+    install_handler(lambda req: _json(_xref_response(go_count=3)))
+    out = server.lookup_gene_evidence(stable_id="X")
+    assert out["evidence_tier"] == "low_some_annotation"
+
+
+def test_lookup_gene_evidence_minimal_tier(install_handler):
+    """Cross-references exist but no functional annotation."""
+    install_handler(lambda req: _json([
+        {"primary_id": "X", "display_id": "X", "description": None, "info_type": "DIRECT", "dbname": "EntrezGene"}
+    ]))
+    out = server.lookup_gene_evidence(stable_id="X")
+    assert out["evidence_tier"] == "minimal"
+
+
+def test_lookup_gene_evidence_404(install_handler):
+    install_handler(lambda req: _json({}, 404))
+    out = server.lookup_gene_evidence(stable_id="GARBAGE")
+    assert "error" in out
+
+
+def test_lookup_gene_evidence_cannabis_fallback(install_handler):
+    install_handler(lambda req: _json({}, 500))
+    out = server.lookup_gene_evidence(stable_id="X", species="cannabis_sativa")
+    assert out["available_in_ensembl_plants"] is False
+
+
+# ---------------------------------------------------------------------------
+# Atlas evidence enrichment
+# ---------------------------------------------------------------------------
+
+
+def test_atlas_evidence_loaded():
+    """The atlas_evidence.json file should be present in the package and load."""
+    assert isinstance(server._ATLAS_EVIDENCE, dict)
+    # Should have at least one entry — the audit covered 80+ genes.
+    assert len(server._ATLAS_EVIDENCE) > 30
+
+
+def test_find_trait_genes_surfaces_evidence_tier():
+    """find_trait_genes should attach the cached evidence tier per gene."""
+    out = server.find_trait_genes(trait="salt_tolerance")
+    sos1_entry = next((g for g in out["genes"] if g["symbol"] == "SOS1"), None)
+    assert sos1_entry is not None
+    # SOS1 is one of the canonical UniProt-curated entries.
+    assert sos1_entry.get("evidence") is not None
+    assert sos1_entry["evidence"]["evidence_tier"] == "high_curated"
+    assert sos1_entry["evidence"]["uniprot_id"] == "Q9LKW9"
+
+
+def test_find_trait_genes_reports_high_curated_count():
+    """The result should include a count + fraction of high-curated genes."""
+    out = server.find_trait_genes(trait="salt_tolerance")
+    assert "high_curated_gene_count" in out
+    assert "high_curated_fraction" in out
+    assert out["high_curated_gene_count"] >= 4  # SOS1/2/3 + NHX1 + HKT1 at minimum
+
+
+def test_find_trait_genes_evidence_none_when_uncurated():
+    """For genes without an ensembl_id or without an audited xref, evidence is None."""
+    out = server.find_trait_genes(trait="submergence_tolerance")
+    # SK1 and SK2 are unresolvable literature handles
+    sk1 = next((g for g in out["genes"] if g["symbol"] == "SK1"), None)
+    assert sk1 is not None
+    assert sk1.get("evidence") is None
+
+
+def test_primary_ref_present_on_canonical_genes():
+    """The well-characterized canonical genes should carry a primary_ref."""
+    atlas = server.TRAIT_ATLAS
+    canonical = [
+        ("drought_tolerance", "DREB1A"),
+        ("salt_tolerance", "SOS1"),
+        ("submergence_tolerance", "SUB1A"),
+        ("phosphorus_uptake", "PSTOL1"),
+        ("nitrogen_use_efficiency", "NRT1.1B"),
+        ("plant_height_dwarfing", "SD1"),
+        ("tiller_branching", "TB1"),
+        ("aluminum_tolerance", "ALMT1"),
+        ("grain_quality", "BADH2"),
+    ]
+    missing = []
+    for trait, symbol in canonical:
+        gene = next((g for g in atlas[trait]["genes"] if g["symbol"] == symbol), None)
+        assert gene is not None, f"Missing {symbol} in {trait}"
+        if "primary_ref" not in gene:
+            missing.append((trait, symbol))
+    assert not missing, f"Canonical genes missing primary_ref: {missing}"
+
+
 def test_translate_trait_uses_ensembl_id_when_available(install_handler):
     """When atlas gene has ensembl_id, that's preferred over symbol."""
     seen = []

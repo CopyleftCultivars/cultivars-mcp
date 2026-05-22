@@ -1,0 +1,776 @@
+{
+  "AT4G33950": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q940H6",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q940H6",
+    "go_term_count": 30,
+    "reactome_pathways": [
+      "Development of root hair",
+      "Abscisic acid (ABA) mediated signaling"
+    ],
+    "pdb_count": 5
+  },
+  "AT5G52310": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q06738",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q06738",
+    "go_term_count": 1,
+    "reactome_pathways": [],
+    "pdb_count": 0
+  },
+  "Os01g0307500": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q0JNB6",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q0JNB6",
+    "go_term_count": 0,
+    "reactome_pathways": [],
+    "pdb_count": 0
+  },
+  "Os09g0286600": {
+    "evidence_tier": "moderate_auto_annotated",
+    "uniprot_id": null,
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/A0A0P0XK33",
+    "go_term_count": 12,
+    "reactome_pathways": [],
+    "pdb_count": 0
+  },
+  "AT1G08090": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "O82811",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/O82811",
+    "go_term_count": 3,
+    "reactome_pathways": [],
+    "pdb_count": 0
+  },
+  "Os10g0554200": {
+    "evidence_tier": "low_some_annotation",
+    "uniprot_id": null,
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/A0A0P0XXB6",
+    "go_term_count": 9,
+    "reactome_pathways": [],
+    "pdb_count": 0
+  },
+  "AT4G13510": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "P54144",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/P54144",
+    "go_term_count": 9,
+    "reactome_pathways": [],
+    "pdb_count": 0
+  },
+  "AT5G43350": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q8VYM2",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q8VYM2",
+    "go_term_count": 21,
+    "reactome_pathways": [],
+    "pdb_count": 0
+  },
+  "Os12g0552900": {
+    "evidence_tier": "low_some_annotation",
+    "uniprot_id": null,
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q0IMR0",
+    "go_term_count": 5,
+    "reactome_pathways": [],
+    "pdb_count": 0
+  },
+  "AT2G28160": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q0V7X4",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q0V7X4",
+    "go_term_count": 6,
+    "reactome_pathways": [],
+    "pdb_count": 0
+  },
+  "AT1G14920": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q9LQT8",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q9LQT8",
+    "go_term_count": 0,
+    "reactome_pathways": [
+      "Jasmonic acid signaling",
+      "Gibberellin signaling"
+    ],
+    "pdb_count": 2
+  },
+  "AT5G57090": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q9LU77",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q9LU77",
+    "go_term_count": 32,
+    "reactome_pathways": [
+      "Polar auxin transport"
+    ],
+    "pdb_count": 0
+  },
+  "AT5G20730": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "P93022",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/P93022",
+    "go_term_count": 12,
+    "reactome_pathways": [
+      "Auxin signalling"
+    ],
+    "pdb_count": 2
+  },
+  "Os04g0179700": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q0JEZ8",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q0JEZ8",
+    "go_term_count": 0,
+    "reactome_pathways": [],
+    "pdb_count": 0
+  },
+  "Os06g0275000": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q9FDX8",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q9FDX8",
+    "go_term_count": 0,
+    "reactome_pathways": [],
+    "pdb_count": 1
+  },
+  "Os01g0883800": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q0JH50",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q0JH50",
+    "go_term_count": 0,
+    "reactome_pathways": [],
+    "pdb_count": 0
+  },
+  "Zm00001eb019200": {
+    "evidence_tier": "low_some_annotation",
+    "uniprot_id": null,
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/A0A804LLE3",
+    "go_term_count": 0,
+    "reactome_pathways": [],
+    "pdb_count": 0
+  },
+  "Zm00001eb287100": {
+    "evidence_tier": "moderate_auto_annotated",
+    "uniprot_id": null,
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/B4FT20",
+    "go_term_count": 15,
+    "reactome_pathways": [
+      "Primary root development"
+    ],
+    "pdb_count": 0
+  },
+  "AT4G34230": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "O49482",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/O49482",
+    "go_term_count": 12,
+    "reactome_pathways": [
+      "Phenylpropanoid biosynthesis"
+    ],
+    "pdb_count": 2
+  },
+  "Os06g0133000": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q0DEV5",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q0DEV5",
+    "go_term_count": 10,
+    "reactome_pathways": [],
+    "pdb_count": 4
+  },
+  "Os08g0424500": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q84LK3",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q84LK3",
+    "go_term_count": 0,
+    "reactome_pathways": [],
+    "pdb_count": 0
+  },
+  "AT1G67090": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "P10795",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/P10795",
+    "go_term_count": 13,
+    "reactome_pathways": [
+      "Calvin cycle",
+      "Photorespiration"
+    ],
+    "pdb_count": 0
+  },
+  "AT4G25480": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q9M0L0",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q9M0L0",
+    "go_term_count": 8,
+    "reactome_pathways": [
+      "Response to cold temperature"
+    ],
+    "pdb_count": 0,
+    "resolved_via_symbol": "DREB1A"
+  },
+  "AT5G05410": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "O82132",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/O82132",
+    "go_term_count": 11,
+    "reactome_pathways": [],
+    "pdb_count": 1,
+    "resolved_via_symbol": "DREB2A"
+  },
+  "Os09g0439800": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q69P88",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q69P88",
+    "go_term_count": 0,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "DRO1"
+  },
+  "AT2G01980": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q9LKW9",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q9LKW9",
+    "go_term_count": 35,
+    "reactome_pathways": [],
+    "pdb_count": 4,
+    "resolved_via_symbol": "SOS1"
+  },
+  "AT5G35410": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q9LDI3",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q9LDI3",
+    "go_term_count": 25,
+    "reactome_pathways": [],
+    "pdb_count": 2,
+    "resolved_via_symbol": "SOS2"
+  },
+  "AT5G24270": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "O81223",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/O81223",
+    "go_term_count": 47,
+    "reactome_pathways": [],
+    "pdb_count": 12,
+    "resolved_via_symbol": "SOS3"
+  },
+  "AT5G27150": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q68KI4",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q68KI4",
+    "go_term_count": 46,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "NHX1"
+  },
+  "AT4G10310": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q84TI7",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q84TI7",
+    "go_term_count": 15,
+    "reactome_pathways": [],
+    "pdb_count": 2,
+    "resolved_via_symbol": "HKT1"
+  },
+  "AT4G25490": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "P93835",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/P93835",
+    "go_term_count": 8,
+    "reactome_pathways": [
+      "Response to cold temperature"
+    ],
+    "pdb_count": 0,
+    "resolved_via_symbol": "CBF1"
+  },
+  "AT4G25470": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q9SYS6",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q9SYS6",
+    "go_term_count": 8,
+    "reactome_pathways": [
+      "Response to cold temperature"
+    ],
+    "pdb_count": 0,
+    "resolved_via_symbol": "CBF2"
+  },
+  "AT3G26744": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q9LSE2",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q9LSE2",
+    "go_term_count": 17,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "ICE1"
+  },
+  "AT2G42540": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q42512",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q42512",
+    "go_term_count": 0,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "COR15A"
+  },
+  "Solyc08g005170.3": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q40152",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q40152",
+    "go_term_count": 0,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "HsfA1a"
+  },
+  "AT2G26150": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "O80982",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/O80982",
+    "go_term_count": 22,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "HsfA2"
+  },
+  "AT3G12580": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q9LHA8",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q9LHA8",
+    "go_term_count": 9,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "HSP70"
+  },
+  "AT1G74310": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "P42730",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/P42730",
+    "go_term_count": 16,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "HSP101"
+  },
+  "AT1G12110": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q05085",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q05085",
+    "go_term_count": 4,
+    "reactome_pathways": [],
+    "pdb_count": 3,
+    "resolved_via_symbol": "NRT1.1"
+  },
+  "AT5G57440": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q8VZP1",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q8VZP1",
+    "go_term_count": 6,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "GS1"
+  },
+  "AT2G33770": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q8VY10",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q8VY10",
+    "go_term_count": 0,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "PHO2"
+  },
+  "AT4G28610": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q94CL7",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q94CL7",
+    "go_term_count": 19,
+    "reactome_pathways": [],
+    "pdb_count": 6,
+    "resolved_via_symbol": "PHR1"
+  },
+  "IRT1": {
+    "evidence_tier": "minimal",
+    "uniprot_id": null,
+    "uniprot_url": null,
+    "go_term_count": 0,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "IRT1"
+  },
+  "AT1G01580": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "P92949",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/P92949",
+    "go_term_count": 6,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "FRO2"
+  },
+  "gene46630": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q6RET7",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q6RET7",
+    "go_term_count": 17,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "CCaMK"
+  },
+  "gene7068": {
+    "evidence_tier": "minimal",
+    "uniprot_id": null,
+    "uniprot_url": null,
+    "go_term_count": 0,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "DMI1"
+  },
+  "gene1327": {
+    "evidence_tier": "low_some_annotation",
+    "uniprot_id": null,
+    "uniprot_url": null,
+    "go_term_count": 2,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "PT4"
+  },
+  "gene39057": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "G7L166",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/G7L166",
+    "go_term_count": 0,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "RAM1"
+  },
+  "gene29122": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q0GXS4",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q0GXS4",
+    "go_term_count": 3,
+    "reactome_pathways": [],
+    "pdb_count": 1,
+    "resolved_via_symbol": "NFP"
+  },
+  "gene32903": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q6UD73",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q6UD73",
+    "go_term_count": 18,
+    "reactome_pathways": [],
+    "pdb_count": 1,
+    "resolved_via_symbol": "LYK3"
+  },
+  "gene33826": {
+    "evidence_tier": "low_some_annotation",
+    "uniprot_id": null,
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/C0LLV9",
+    "go_term_count": 4,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "NIN"
+  },
+  "gene42085": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "A2Q5W1",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/A2Q5W1",
+    "go_term_count": 11,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "ERN1"
+  },
+  "NSP1": {
+    "evidence_tier": "minimal",
+    "uniprot_id": null,
+    "uniprot_url": null,
+    "go_term_count": 0,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "NSP1"
+  },
+  "AT2G42430": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q9SLB7",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q9SLB7",
+    "go_term_count": 0,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "LBD16"
+  },
+  "AT1G66470": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q9C707",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q9C707",
+    "go_term_count": 3,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "RHD6"
+  },
+  "COI1": {
+    "evidence_tier": "minimal",
+    "uniprot_id": null,
+    "uniprot_url": null,
+    "go_term_count": 0,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "COI1"
+  },
+  "AT1G32640": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q39204",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q39204",
+    "go_term_count": 38,
+    "reactome_pathways": [
+      "Jasmonic acid signaling"
+    ],
+    "pdb_count": 1,
+    "resolved_via_symbol": "MYC2"
+  },
+  "AT3G45140": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "P38418",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/P38418",
+    "go_term_count": 10,
+    "reactome_pathways": [
+      "13-LOX and 13-HPL pathway",
+      "Jasmonic acid biosynthesis"
+    ],
+    "pdb_count": 0,
+    "resolved_via_symbol": "LOX2"
+  },
+  "AT2G46370": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q9SKE2",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q9SKE2",
+    "go_term_count": 0,
+    "reactome_pathways": [
+      "Jasmonic acid signaling"
+    ],
+    "pdb_count": 24,
+    "resolved_via_symbol": "JAR1"
+  },
+  "AT1G19180": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q9LMA8",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q9LMA8",
+    "go_term_count": 8,
+    "reactome_pathways": [],
+    "pdb_count": 10,
+    "resolved_via_symbol": "JAZ1"
+  },
+  "AT5G23960": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q84UU4",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q84UU4",
+    "go_term_count": 10,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "TPS21"
+  },
+  "Zm00001eb415160": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q2NM15",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q2NM15",
+    "go_term_count": 0,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "TPS10"
+  },
+  "STO1": {
+    "evidence_tier": "minimal",
+    "uniprot_id": null,
+    "uniprot_url": null,
+    "go_term_count": 0,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "STO1"
+  },
+  "AT5G61420": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q9SPG2",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q9SPG2",
+    "go_term_count": 15,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "MYB28"
+  },
+  "AT5G07690": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q9FLR1",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q9FLR1",
+    "go_term_count": 24,
+    "reactome_pathways": [],
+    "pdb_count": 1,
+    "resolved_via_symbol": "MYB29"
+  },
+  "AT1G18570": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "O49782",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/O49782",
+    "go_term_count": 11,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "MYB51"
+  },
+  "AT4G39950": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "O81346",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/O81346",
+    "go_term_count": 8,
+    "reactome_pathways": [
+      "IAA biosynthesis I"
+    ],
+    "pdb_count": 0,
+    "resolved_via_symbol": "CYP79B2"
+  },
+  "AT1G65480": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q9SXZ2",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q9SXZ2",
+    "go_term_count": 1,
+    "reactome_pathways": [
+      "Flower development",
+      "Short day regulated expression of florigens",
+      "Long day regulated expression of florigens"
+    ],
+    "pdb_count": 5,
+    "resolved_via_symbol": "FT"
+  },
+  "AT5G15840": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q39057",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q39057",
+    "go_term_count": 9,
+    "reactome_pathways": [
+      "Short day regulated expression of florigens",
+      "Long day regulated expression of florigens"
+    ],
+    "pdb_count": 4,
+    "resolved_via_symbol": "CO"
+  },
+  "AT5G10140": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q9S7Q7",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q9S7Q7",
+    "go_term_count": 68,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "FLC"
+  },
+  "TraesCS5A02G391700": {
+    "evidence_tier": "moderate_auto_annotated",
+    "uniprot_id": null,
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/A0A3B6KM19",
+    "go_term_count": 32,
+    "reactome_pathways": [
+      "Flower development",
+      "Transition from vegetative to reproductive shoot apical meristem",
+      "Long day regulated expression of florigens"
+    ],
+    "pdb_count": 0,
+    "resolved_via_symbol": "Vrn-A1"
+  },
+  "TraesCS4B02G043100": {
+    "evidence_tier": "low_some_annotation",
+    "uniprot_id": null,
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/A0A9R1GIW7",
+    "go_term_count": 2,
+    "reactome_pathways": [
+      "Jasmonic acid signaling",
+      "Gibberellin signaling"
+    ],
+    "pdb_count": 0,
+    "resolved_via_symbol": "Rht-B1"
+  },
+  "AT2G42620": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q9SIM9",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q9SIM9",
+    "go_term_count": 21,
+    "reactome_pathways": [
+      "Strigolactone signaling"
+    ],
+    "pdb_count": 0,
+    "resolved_via_symbol": "MAX2"
+  },
+  "Os03g0203200": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q10QA5",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q10QA5",
+    "go_term_count": 0,
+    "reactome_pathways": [],
+    "pdb_count": 15,
+    "resolved_via_symbol": "D14"
+  },
+  "Os06g0610350": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q84MM9",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q84MM9",
+    "go_term_count": 0,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "MOC1"
+  },
+  "TraesCS4D02G283600": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q76LB1",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q76LB1",
+    "go_term_count": 7,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "ALMT1"
+  },
+  "AT1G34370": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q9C8N5",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q9C8N5",
+    "go_term_count": 15,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "STOP1"
+  },
+  "AT4G32410": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "O48946",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/O48946",
+    "go_term_count": 16,
+    "reactome_pathways": [
+      "Cellulose biosynthesis"
+    ],
+    "pdb_count": 0,
+    "resolved_via_symbol": "CESA1"
+  },
+  "AT5G44030": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q84JA6",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q84JA6",
+    "go_term_count": 33,
+    "reactome_pathways": [
+      "Cellulose biosynthesis"
+    ],
+    "pdb_count": 0,
+    "resolved_via_symbol": "CESA4"
+  },
+  "AT2G37040": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "P35510",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/P35510",
+    "go_term_count": 27,
+    "reactome_pathways": [
+      "Phenylpropanoid biosynthesis, initial reactions",
+      "Suberin biosynthesis",
+      "Salicylate biosynthesis"
+    ],
+    "pdb_count": 0,
+    "resolved_via_symbol": "PAL1"
+  },
+  "AT1G15950": {
+    "evidence_tier": "high_curated",
+    "uniprot_id": "Q9S9N9",
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/Q9S9N9",
+    "go_term_count": 0,
+    "reactome_pathways": [
+      "Phenylpropanoid biosynthesis"
+    ],
+    "pdb_count": 0,
+    "resolved_via_symbol": "CCR1"
+  },
+  "Os07g0412100": {
+    "evidence_tier": "low_some_annotation",
+    "uniprot_id": null,
+    "uniprot_url": "https://www.uniprot.org/uniprotkb/A0A0N7KNB2",
+    "go_term_count": 10,
+    "reactome_pathways": [],
+    "pdb_count": 0,
+    "resolved_via_symbol": "GBSSII"
+  }
+}

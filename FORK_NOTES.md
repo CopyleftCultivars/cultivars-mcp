@@ -361,6 +361,75 @@ The metrics framework matters as much as the deltas: M1 in particular
 caught a 33% silently-wrong rate in the original atlas, which I would
 not have noticed from inspection.
 
+## Postscript II — Veracity audit (added 2026-05-22, same session)
+
+The first deep-work round measured *resolvability* (does the atlas
+gene exist in Ensembl). The second round measures *veracity* (does
+the atlas gene's claimed function have independent verification
+backing it).
+
+**Method.** For each gene with a resolvable Ensembl stable ID, fetch
+the full Ensembl `/xrefs/id?all_levels=1` cross-reference chain.
+Grade by UniProt curation tier (SWISSPROT = manually curated +
+PubMed-cited > SPTREMBL = auto-annotated > nothing) and supplemental
+annotation depth (GO term count, Plant Reactome pathway membership,
+PDB structures, BioGRID interactions).
+
+**Results across the 93-gene atlas:**
+
+- 73.1% (68/93) have a UniProt/SWISSPROT manually-curated entry. This
+  is the strongest objective veracity signal available without
+  reading individual papers.
+- 24.7% (23/93) have Plant Reactome pathway annotations.
+- 23.7% (22/93) have PDB-solved 3D structures.
+- Mean 11.0 GO terms per gene; median 8.
+- 10.8% (10/93) are unresolvable — all are deliberate "literature
+  handles" already flagged with citation `note` fields (barley HVA1/
+  IDS3, rice SK1/2, sorghum SbMATE/MATE1, Medicago SYMRK, wheat
+  GLU-A1, maize PEPC/NADP-ME/PPDK).
+
+**New tool: `lookup_gene_evidence`** — given any Ensembl Plants
+stable ID, returns the full evidence trail: UniProt curated ID +
+URL (where the function statement + PubMed citations live), GO term
+count, Plant Reactome pathways, PDB structures, BioGRID/STRING
+interaction-DB cross-refs, TAIR/RAP-DB authoritative annotations.
+
+**Trait-atlas enrichment.** `find_trait_genes` now ships an
+`evidence` field per gene (loaded from a cached `atlas_evidence.json`
+populated by the live audit), plus a `high_curated_gene_count` +
+`high_curated_fraction` at the trait level. 10 canonical entries
+gained explicit `primary_ref` (PubMed-cited seminal paper) and
+`evidence_level` (knockout_phenotype / transgenic_complementation /
+qtl_mapped) fields.
+
+**Example output (salt_tolerance trait, 6/6 = 100% high_curated):**
+
+| Gene | UniProt | GO | PDB | Evidence Level | Primary Ref |
+|---|---|---|---|---|---|
+| SOS1 | Q9LKW9 | 35 | 4 | knockout | Shi 2000 PMID 10823923 |
+| SOS2 | Q9LDI3 | 25 | 2 | knockout | Liu 2000 PMID 10725357 |
+| SOS3 | O81223 | 47 | 12 | knockout | Liu & Zhu 1998 PMID 9632394 |
+| NHX1 | Q68KI4 | 46 | 0 | — | — |
+| HKT1 | Q84TI7 | 15 | 2 | — | — |
+| OsHKT1;5 | Q0JNB6 | 0 | 0 | — | — |
+
+**What this changes for users.** A grower-scientist using
+`find_trait_genes` now sees per-gene:
+1. The atlas's function description (my paraphrase of common
+   knowledge — a starting point)
+2. The UniProt curation tier (objective: was this gene manually
+   reviewed by a curator?)
+3. The UniProt ID + URL (drill-in: read the curated function
+   statement + cited evidence)
+4. GO term + PDB + Reactome counts (annotation depth signal)
+5. Where I added it: PubMed-cited primary characterization paper
+6. Where I added it: evidence_level (knockout > transgenic > QTL >
+   GWAS > similarity)
+
+The atlas is still a starting-point literature map — but now the
+LLM has structured signals to grade *how confident to be* about any
+given claim, and a direct trail to follow when fact-checking.
+
 ## Closing
 
 Your upstream design carried straight through the rebuild. The MCP

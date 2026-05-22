@@ -32,10 +32,48 @@ does not replace them.
 """
 
 import concurrent.futures
+import json
+import pathlib
 import time
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+
+# Veracity backbone: an evidence map keyed by Ensembl stable ID, populated
+# from `evals/atlas_audit.py` against live Ensembl xrefs. Records the
+# UniProt/SWISSPROT curation tier, GO term count, Plant Reactome pathway
+# memberships, and PDB structure count for each atlas gene. Loaded lazily;
+# missing entries return None (find_trait_genes treats absence honestly).
+_EVIDENCE_FILE = pathlib.Path(__file__).parent / "atlas_evidence.json"
+try:
+    _ATLAS_EVIDENCE: dict[str, dict] = json.loads(_EVIDENCE_FILE.read_text())
+except FileNotFoundError:
+    _ATLAS_EVIDENCE = {}
+
+# Secondary index: symbol → evidence record. The audit resolved many atlas
+# genes via symbol lookup; this lets find_trait_genes find them without
+# requiring every atlas entry to carry an ensembl_id.
+_ATLAS_EVIDENCE_BY_SYMBOL: dict[str, dict] = {
+    rec["resolved_via_symbol"]: rec | {"_resolved_id": stable_id}
+    for stable_id, rec in _ATLAS_EVIDENCE.items()
+    if rec.get("resolved_via_symbol")
+}
+
+
+def _evidence_for_gene(gene: dict) -> dict | None:
+    """Find the cached evidence record for an atlas gene entry.
+
+    Tries: (1) explicit ensembl_id → primary index, (2) symbol → secondary
+    index. Returns None when neither resolves — the LLM sees an honest
+    'evidence unknown' rather than a fabricated tier.
+    """
+    eid = gene.get("ensembl_id")
+    if eid and eid in _ATLAS_EVIDENCE:
+        return _ATLAS_EVIDENCE[eid]
+    symbol = gene.get("symbol")
+    if symbol and symbol in _ATLAS_EVIDENCE_BY_SYMBOL:
+        return _ATLAS_EVIDENCE_BY_SYMBOL[symbol]
+    return None
 
 BASE_URL = "https://rest.ensembl.org"
 DEFAULT_SPECIES = "arabidopsis_thaliana"
@@ -126,7 +164,25 @@ mcp = FastMCP(
         "target_species in one call. Internally runs find_trait_genes "
         "then issues concurrent ortholog calls to the target species. "
         "Use this when the user asks 'what are the drought genes in MY "
-        "crop?' — one call replaces ~7 sequential calls.\n\n"
+        "crop?' — one call replaces ~7 sequential calls.\n"
+        "12. lookup_gene_evidence — the VERACITY backbone. For any "
+        "Ensembl Plants gene stable ID, returns the cross-reference "
+        "chain: UniProt/SWISSPROT curation tier (manually curated vs. "
+        "auto-annotated), GO term count, Plant Reactome pathway "
+        "memberships, PDB structures, TAIR/RAP-DB/MaizeGDB authoritative "
+        "cross-refs, BioGRID/STRING interaction databases. The "
+        "evidence_tier field grades each gene's annotation depth. Call "
+        "this whenever you need to verify an atlas claim or assess "
+        "annotation confidence before reasoning from a gene's function.\n\n"
+        "Veracity note: find_trait_genes results include an 'evidence' "
+        "field per gene with the UniProt curation tier (cached from a "
+        "live audit). 'high_curated' = manually curated UniProt entry "
+        "with PubMed-cited evidence. 73% of atlas entries reach this "
+        "tier. Many also carry a primary_ref field citing the original "
+        "characterization paper (PubMed ID + author + journal). When "
+        "evidence == null, the function description is a literature "
+        "handle without a verified xref chain — say so explicitly to "
+        "the user.\n\n"
         "Coordinate convention: Ensembl is 1-based, fully-closed (same as "
         "VCF / GFF). Region strings are 'chrom:start-end' with optional "
         "':strand' (default +1). No 'chr' prefix on plant chromosomes — "
@@ -161,7 +217,7 @@ TRAIT_ATLAS = {
         "description": "Genes governing water-deficit response, including ABA signaling, osmotic-stress regulons, and dehydration-responsive transcription factors.",
         "natural_farming_relevance": "Foundational for marginal-land smallholder agriculture and for landrace varieties selected over centuries on rain-fed plots.",
         "genes": [
-            {"symbol": "DREB1A", "alias": "CBF3", "characterized_in": "arabidopsis_thaliana", "function": "Master TF activating the cold/drought response regulon; the canonical entry point for drought engineering."},
+            {"symbol": "DREB1A", "alias": "CBF3", "characterized_in": "arabidopsis_thaliana", "function": "Master TF activating the cold/drought response regulon; the canonical entry point for drought engineering.", "primary_ref": "Liu et al. 1998 Plant Cell 10:1391 (PMID 9707537) — original characterization of DREB1A binding to dehydration-responsive element. Kasuga et al. 1999 Nat Biotechnol 17:287 (PMID 10096295) — transgenic overexpression confers drought + freezing tolerance.", "evidence_level": "transgenic_complementation"},
             {"symbol": "DREB2A", "characterized_in": "arabidopsis_thaliana", "function": "TF activating osmotic-stress genes under drought and heat."},
             {"symbol": "OST1", "alias": "SnRK2.6", "ensembl_id": "AT4G33950", "characterized_in": "arabidopsis_thaliana", "function": "ABA-activated kinase, central to stomatal closure under water deficit."},
             {"symbol": "RD29A", "alias": "COR78 / LTI78", "ensembl_id": "AT5G52310", "characterized_in": "arabidopsis_thaliana", "function": "Dehydration-responsive marker gene; classical DREB1A target."},
@@ -173,9 +229,9 @@ TRAIT_ATLAS = {
         "description": "Salt Overly Sensitive (SOS) pathway, vacuolar sodium sequestration, and root-to-shoot Na+ exclusion.",
         "natural_farming_relevance": "Critical for coastal and irrigated-arid smallholder farming where soil salinization is rising.",
         "genes": [
-            {"symbol": "SOS1", "characterized_in": "arabidopsis_thaliana", "function": "Plasma-membrane Na+/H+ antiporter; root-tip sodium extrusion."},
-            {"symbol": "SOS2", "alias": "CIPK24", "characterized_in": "arabidopsis_thaliana", "function": "Kinase activating SOS1 under salt; signal-relay step."},
-            {"symbol": "SOS3", "alias": "CBL4", "characterized_in": "arabidopsis_thaliana", "function": "Ca2+ sensor that perceives salt-induced cytosolic Ca2+ spike."},
+            {"symbol": "SOS1", "characterized_in": "arabidopsis_thaliana", "function": "Plasma-membrane Na+/H+ antiporter; root-tip sodium extrusion.", "primary_ref": "Shi et al. 2000 PNAS 97:6896 (PMID 10823923) — sos1 mutant + cloning. Shi et al. 2002 Nat Biotechnol 21:81 — overexpression confers salt tolerance.", "evidence_level": "knockout_phenotype"},
+            {"symbol": "SOS2", "alias": "CIPK24", "characterized_in": "arabidopsis_thaliana", "function": "Kinase activating SOS1 under salt; signal-relay step.", "primary_ref": "Liu et al. 2000 PNAS 97:3730 (PMID 10725357) — sos2 mutant identified the salt-overly-sensitive locus 2 kinase.", "evidence_level": "knockout_phenotype"},
+            {"symbol": "SOS3", "alias": "CBL4", "characterized_in": "arabidopsis_thaliana", "function": "Ca2+ sensor that perceives salt-induced cytosolic Ca2+ spike.", "primary_ref": "Liu & Zhu 1998 Science 280:1943 (PMID 9632394) — sos3 mutant and Ca2+-sensor characterization.", "evidence_level": "knockout_phenotype"},
             {"symbol": "NHX1", "characterized_in": "arabidopsis_thaliana", "function": "Vacuolar Na+/H+ antiporter — sequesters cytotoxic sodium away from cytoplasm."},
             {"symbol": "HKT1", "characterized_in": "arabidopsis_thaliana", "function": "Na+ transporter; xylem unloading limits Na+ shoot accumulation."},
             {"symbol": "OsHKT1;5", "ensembl_id": "Os01g0307500", "characterized_in": "oryza_sativa", "function": "Rice ortholog of HKT1; Saltol QTL on chromosome 1 in salt-tolerant Pokkali landrace."},
@@ -205,7 +261,7 @@ TRAIT_ATLAS = {
         "description": "Rice-specific quiescence vs. escape strategies under flooding; SUB1 (quiescence) and SK1/2 (escape) loci.",
         "natural_farming_relevance": "Hugely important for monsoon-region smallholder rice farmers; SUB1 introgression into mega-varieties was a landmark public-sector breeding success.",
         "genes": [
-            {"symbol": "SUB1A", "ensembl_id": "Os09g0286600", "characterized_in": "oryza_sativa", "function": "ERF TF on chromosome 9; suppresses elongation under submergence (quiescence strategy) — basis of Swarna-Sub1 and similar flood-tolerant landrace introgressions."},
+            {"symbol": "SUB1A", "ensembl_id": "Os09g0286600", "characterized_in": "oryza_sativa", "function": "ERF TF on chromosome 9; suppresses elongation under submergence (quiescence strategy) — basis of Swarna-Sub1 and similar flood-tolerant landrace introgressions.", "primary_ref": "Xu et al. 2006 Nature 442:705 (PMID 16900200) — SUB1A cloning + transgenic complementation. Septiningsih et al. 2009 Ann Bot 103:151 — Swarna-Sub1 introgression line breeding history.", "evidence_level": "transgenic_complementation"},
             {"symbol": "SK1", "characterized_in": "oryza_sativa", "function": "ERF TF in deepwater rice; promotes internode elongation (escape strategy).", "note": "Literature handle — Hattori et al. 2009; not directly resolvable by symbol in current Ensembl Plants."},
             {"symbol": "SK2", "characterized_in": "oryza_sativa", "function": "Paralog of SK1; same elongation-promoting role under submergence.", "note": "Literature handle — Hattori et al. 2009."},
         ],
@@ -216,7 +272,7 @@ TRAIT_ATLAS = {
         "genes": [
             {"symbol": "NRT1.1", "alias": "NPF6.3, CHL1", "characterized_in": "arabidopsis_thaliana", "function": "Dual-affinity nitrate transceptor; also signals nitrate status."},
             {"symbol": "NRT2.1", "ensembl_id": "AT1G08090", "characterized_in": "arabidopsis_thaliana", "function": "High-affinity nitrate transporter; dominant under low-N conditions."},
-            {"symbol": "NRT1.1B", "alias": "OsNPF6.5", "ensembl_id": "Os10g0554200", "characterized_in": "oryza_sativa", "function": "Indica-allele variant underlies superior N-use efficiency in indica vs. japonica rice — landrace breeding target."},
+            {"symbol": "NRT1.1B", "alias": "OsNPF6.5", "ensembl_id": "Os10g0554200", "characterized_in": "oryza_sativa", "function": "Indica-allele variant underlies superior N-use efficiency in indica vs. japonica rice — landrace breeding target.", "primary_ref": "Hu et al. 2015 Nat Genet 47:834 (PMID 26053497) — divergent indica/japonica alleles drive nitrate-uptake difference; the indica variant introgressed into japonica improves NUE.", "evidence_level": "transgenic_complementation"},
             {"symbol": "AMT1;1", "alias": "AMT1.1", "ensembl_id": "AT4G13510", "characterized_in": "arabidopsis_thaliana", "function": "High-affinity ammonium transporter; dominant N source under acidic-soil / paddy conditions."},
             {"symbol": "GS1", "characterized_in": "arabidopsis_thaliana", "function": "Cytosolic glutamine synthetase; assimilates NH4+ into glutamine."},
         ],
@@ -228,7 +284,7 @@ TRAIT_ATLAS = {
             {"symbol": "PHT1;1", "alias": "PHT1.1", "ensembl_id": "AT5G43350", "characterized_in": "arabidopsis_thaliana", "function": "Root high-affinity Pi transporter."},
             {"symbol": "PHO2", "alias": "UBC24", "characterized_in": "arabidopsis_thaliana", "function": "E2 ubiquitin ligase that down-regulates Pi uptake under P-replete conditions; miR399 target."},
             {"symbol": "PHR1", "characterized_in": "arabidopsis_thaliana", "function": "Master TF of the Pi-starvation response."},
-            {"symbol": "PSTOL1", "ensembl_id": "Os12g0552900", "characterized_in": "oryza_sativa", "function": "Phosphorus-Starvation Tolerance 1 — protein kinase; the Kasalath landrace allele dramatically improves rice P uptake on low-P soils. A canonical public-sector breeding success (Gamuyao et al. 2012)."},
+            {"symbol": "PSTOL1", "ensembl_id": "Os12g0552900", "characterized_in": "oryza_sativa", "function": "Phosphorus-Starvation Tolerance 1 — protein kinase; the Kasalath landrace allele dramatically improves rice P uptake on low-P soils. A canonical public-sector breeding success.", "primary_ref": "Gamuyao et al. 2012 Nature 488:535 (PMID 22914168) — PSTOL1 cloning from Kasalath, transgenic complementation in IR74 background.", "evidence_level": "transgenic_complementation"},
         ],
     },
     "iron_uptake": {
@@ -321,7 +377,7 @@ TRAIT_ATLAS = {
         "description": "Gibberellin-signaling alleles underlying the Green Revolution semi-dwarf phenotype.",
         "natural_farming_relevance": "Dwarfing alleles trade off against root depth and lodging resistance vs. yield-under-irrigation. Heritage tall varieties carry recessive *wild-type* alleles at these loci — relevant to context-specific landrace selection.",
         "genes": [
-            {"symbol": "SD1", "alias": "C20ox2 / OsGA20ox2", "ensembl_id": "Os01g0883800", "characterized_in": "oryza_sativa", "function": "GA20 oxidase — IR8 'miracle rice' semi-dwarf allele underlying the rice Green Revolution. Ensembl display name is C20ox2."},
+            {"symbol": "SD1", "alias": "C20ox2 / OsGA20ox2", "ensembl_id": "Os01g0883800", "characterized_in": "oryza_sativa", "function": "GA20 oxidase — IR8 'miracle rice' semi-dwarf allele underlying the rice Green Revolution. Ensembl display name is C20ox2.", "primary_ref": "Sasaki et al. 2002 Nature 416:701 (PMID 11961545) — sd1 cloning; the IR8 dee-geo-woo-gen-derived loss-of-function allele behind the rice Green Revolution.", "evidence_level": "knockout_phenotype"},
             {"symbol": "Rht-B1", "characterized_in": "triticum_aestivum", "function": "Wheat DELLA — gain-of-function alleles cause Norin-10 semi-dwarfing."},
             {"symbol": "D8", "ensembl_id": "Zm00001eb019200", "characterized_in": "zea_mays", "function": "Maize DELLA; dwarfing allele used in some hybrid backgrounds."},
         ],
@@ -330,7 +386,7 @@ TRAIT_ATLAS = {
         "description": "Strigolactone signaling and TB1-family TFs governing shoot branching / tillering architecture.",
         "natural_farming_relevance": "Tiller number is a primary yield-architecture lever in cereals; landrace selection often shifts this trait toward the local growing system.",
         "genes": [
-            {"symbol": "TB1", "alias": "tb1 / teosinte branched 1", "ensembl_id": "Zm00001eb287100", "characterized_in": "zea_mays", "function": "TCP-domain TF — single locus underlying the most dramatic morphological difference between maize and teosinte (suppressed tillering). Stable ID is from B73 v5 NAM assembly."},
+            {"symbol": "TB1", "alias": "tb1 / teosinte branched 1", "ensembl_id": "Zm00001eb287100", "characterized_in": "zea_mays", "function": "TCP-domain TF — single locus underlying the most dramatic morphological difference between maize and teosinte (suppressed tillering). Stable ID is from B73 v5 NAM assembly.", "primary_ref": "Doebley et al. 1995 Genetics 141:333 + Doebley et al. 1997 Nature 386:485 (PMID 9087409) — tb1 cloning and the teosinte-maize domestication QTL.", "evidence_level": "qtl_mapped"},
             {"symbol": "MAX2", "characterized_in": "arabidopsis_thaliana", "function": "F-box strigolactone-signaling component; loss-of-function = bushy shoots."},
             {"symbol": "D14", "characterized_in": "oryza_sativa", "function": "Strigolactone receptor in rice."},
             {"symbol": "MOC1", "characterized_in": "oryza_sativa", "function": "GRAS TF promoting tiller bud outgrowth."},
@@ -340,8 +396,8 @@ TRAIT_ATLAS = {
         "description": "Root organic-acid efflux (malate / citrate) chelating Al3+ in acidic soils, and the STOP1 transcriptional regulator above it.",
         "natural_farming_relevance": "Al toxicity is THE major constraint on crop yield on acidic tropical soils — the soils where many smallholder farmers work and where heritage landraces have been selected for tolerance over generations.",
         "genes": [
-            {"symbol": "ALMT1", "characterized_in": "triticum_aestivum", "function": "Root-tip malate efflux transporter — first cloned Al-tolerance gene; classical wheat tolerance allele."},
-            {"symbol": "MATE1", "alias": "AltSB / SbMATE", "characterized_in": "sorghum_bicolor", "function": "Root citrate efflux; the major sorghum Al-tolerance gene (Magalhães et al. 2007).", "note": "Literature handle — sorghum SbMATE is at locus Sb03g043890 / SORBI_3003G432200 depending on assembly; not directly resolvable by symbol."},
+            {"symbol": "ALMT1", "characterized_in": "triticum_aestivum", "function": "Root-tip malate efflux transporter — first cloned Al-tolerance gene; classical wheat tolerance allele.", "primary_ref": "Sasaki et al. 2004 Plant J 37:645 (PMID 14871304) — TaALMT1 cloning from Al-tolerant Atlas 66 wheat.", "evidence_level": "transgenic_complementation"},
+            {"symbol": "MATE1", "alias": "AltSB / SbMATE", "characterized_in": "sorghum_bicolor", "function": "Root citrate efflux; the major sorghum Al-tolerance gene.", "primary_ref": "Magalhães et al. 2007 Nat Genet 39:1156 (PMID 17721535) — SbMATE positional cloning from the sorghum AltSB locus.", "evidence_level": "qtl_mapped", "note": "Literature handle — sorghum SbMATE is at locus Sb03g043890 / SORBI_3003G432200 depending on assembly; not directly resolvable by symbol."},
             {"symbol": "STOP1", "characterized_in": "arabidopsis_thaliana", "function": "Zn-finger TF activating ALMT1 and other Al-tolerance genes under acidic conditions."},
         ],
     },
@@ -361,7 +417,7 @@ TRAIT_ATLAS = {
         "natural_farming_relevance": "Heritage cereal varieties (e.g. fragrant basmati / jasmine rices, glutinous rices, high-amylose sorghum, durum/einkorn wheat) carry distinctive grain-quality alleles. These genes underlie the culinary value that smallholder seed-keepers conserve.",
         "genes": [
             {"symbol": "Wx", "alias": "Waxy / GBSSI", "ensembl_id": "Os06g0133000", "characterized_in": "oryza_sativa", "function": "Granule-bound starch synthase; produces amylose. Loss-of-function alleles produce glutinous (waxy) rice; intermediate alleles produce low-amylose varieties (jasmine, basmati)."},
-            {"symbol": "BADH2", "alias": "fgr / Fragrant / Os2AP", "ensembl_id": "Os08g0424500", "characterized_in": "oryza_sativa", "function": "Betaine aldehyde dehydrogenase 2; loss-of-function in basmati and jasmine landraces causes 2-acetyl-1-pyrroline accumulation (the popcorn-like fragrance)."},
+            {"symbol": "BADH2", "alias": "fgr / Fragrant / Os2AP", "ensembl_id": "Os08g0424500", "characterized_in": "oryza_sativa", "function": "Betaine aldehyde dehydrogenase 2; loss-of-function in basmati and jasmine landraces causes 2-acetyl-1-pyrroline accumulation (the popcorn-like fragrance).", "primary_ref": "Bradbury et al. 2005 Plant Biotechnol J 3:363 (PMID 17173626) — fgr/BADH2 cloning; 8-bp deletion accounts for fragrance in basmati and jasmine rices.", "evidence_level": "knockout_phenotype"},
             {"symbol": "GBSSII", "characterized_in": "oryza_sativa", "function": "Soluble starch synthase; controls intermediate amylose levels.", "note": "Literature handle — GBSSII is the soluble paralog of Wx/GBSSI; not directly resolvable by symbol."},
             {"symbol": "GLU-A1", "characterized_in": "triticum_aestivum", "function": "Glutenin subunit — major bread-making quality determinant in wheat.", "note": "Literature handle — high-molecular-weight glutenin loci on wheat 1A; not directly resolvable by symbol."},
         ],
@@ -1099,6 +1155,153 @@ def get_sequence(
 
 
 @mcp.tool()
+def lookup_gene_evidence(stable_id: str, species: str | None = None) -> dict:
+    """Pull the evidence trail for a plant gene from Ensembl Plants cross-references.
+
+    This is the *veracity backbone* of the cultivars MCP. For any Ensembl
+    Plants gene, returns the cross-references to authoritative external
+    databases that an agent (or human) can follow to verify functional
+    claims:
+
+      - **UniProt/SWISSPROT** — manually curated function statement,
+        GO annotations with evidence codes, PubMed citations. The
+        single strongest veracity anchor.
+      - **UniProt/SPTREMBL** — automatically annotated UniProt entries
+        (lower curation tier).
+      - **GO (Gene Ontology)** term count — total functional / process /
+        component annotations.
+      - **Plant Reactome** pathway memberships.
+      - **PDB** — solved protein structures, if any.
+      - **TAIR / RAP-DB / MaizeGDB** equivalents — species-specific
+        curation sources Ensembl mirrors.
+      - **BioGRID / STRING** — protein-protein interaction databases.
+
+    Call this when you need to:
+      - Verify that an atlas claim (e.g. 'DREB1A is the master cold-
+        response TF') has primary-literature backing.
+      - Get the UniProt ID for fetching curated function text externally.
+      - Audit a gene's functional-annotation depth before reasoning from
+        it.
+
+    Args:
+        stable_id: Ensembl Plants gene stable ID (e.g. 'AT2G18790',
+                   'Os09g0286600', 'Zm00001eb287100').
+        species: Optional Ensembl species name — informational only;
+                 stable IDs are globally unique.
+    """
+    species = _normalize_species(species)
+    sid = (stable_id or "").strip()
+    if not sid:
+        return {"error": "stable_id is required"}
+
+    fallback = _community_fallback(species, "lookup_gene_evidence")
+    if fallback:
+        return fallback
+
+    with _get_client() as client:
+        resp = _get_with_retry(client, f"/xrefs/id/{sid}", params={"all_levels": "1"})
+        if resp.status_code in (400, 404):
+            return {
+                "error": "Stable ID not found or has no cross-references",
+                "stable_id": sid,
+            }
+        resp.raise_for_status()
+        xrefs = resp.json()
+
+    # Group cross-references by database, preserving the most informative
+    # ones per category.
+    by_db: dict[str, list[dict]] = {}
+    for x in xrefs:
+        by_db.setdefault(x["dbname"], []).append(x)
+
+    def _entry(x: dict) -> dict:
+        return {
+            "id": x.get("primary_id"),
+            "display": x.get("display_id"),
+            "description": x.get("description"),
+            "info_type": x.get("info_type"),
+        }
+
+    # Curated function source — UniProt/SWISSPROT is the gold standard.
+    swissprot = [_entry(x) for x in by_db.get("Uniprot/SWISSPROT", [])]
+    sptrembl = [_entry(x) for x in by_db.get("Uniprot/SPTREMBL", [])]
+    uniprot_gn = [_entry(x) for x in by_db.get("Uniprot_gn", [])]
+
+    # Pathway membership
+    reactome_pathways = [_entry(x) for x in by_db.get("Plant_Reactome_Pathway", [])]
+    reactome_reactions = [_entry(x) for x in by_db.get("Plant_Reactome_Reaction", [])]
+
+    # Structural / interactions
+    pdb = [_entry(x) for x in by_db.get("PDB", [])]
+    biogrid = [_entry(x) for x in by_db.get("BioGRID", [])]
+    string_xref = [_entry(x) for x in by_db.get("STRING", [])]
+
+    # Species-specific authoritative annotations
+    tair = [_entry(x) for x in by_db.get("TAIR_LOCUS", []) + by_db.get("TAIR_SYMBOL", [])]
+    refseq = [_entry(x) for x in by_db.get("RefSeq_peptide", []) + by_db.get("RefSeq_mRNA", [])]
+    entrez = [_entry(x) for x in by_db.get("EntrezGene", [])]
+
+    # Term-style annotations
+    go_count = len(by_db.get("GO", []))
+    po_count = len(by_db.get("PO", []))
+
+    # Construct a structured evidence-strength tier
+    tier = "minimal"
+    if swissprot:
+        tier = "high_curated"
+    elif sptrembl and go_count > 10:
+        tier = "moderate_auto_annotated"
+    elif sptrembl or go_count > 0:
+        tier = "low_some_annotation"
+
+    # Build external follow-up URLs the LLM can cite directly
+    uniprot_url = None
+    if swissprot:
+        uniprot_url = f"https://www.uniprot.org/uniprotkb/{swissprot[0]['id']}"
+    elif sptrembl:
+        uniprot_url = f"https://www.uniprot.org/uniprotkb/{sptrembl[0]['id']}"
+
+    pubmed_search_url = (
+        f"https://europepmc.org/search?query={sid}" if sid else None
+    )
+
+    return {
+        "stable_id": sid,
+        "species": species,
+        "evidence_tier": tier,
+        "evidence_tier_description": {
+            "high_curated": "UniProt/SWISSPROT entry present — manually curated function with PubMed citations.",
+            "moderate_auto_annotated": "UniProt/SPTREMBL entry with substantial GO annotation; auto-annotated but supported.",
+            "low_some_annotation": "Some functional annotation present but not in curated UniProt.",
+            "minimal": "Cross-references exist but no functional annotation found.",
+        }.get(tier),
+        "uniprot_curated": swissprot,  # SWISSPROT is the manually curated tier
+        "uniprot_auto": sptrembl,       # SPTREMBL is automatic
+        "uniprot_gene_names": uniprot_gn,
+        "uniprot_lookup_url": uniprot_url,
+        "go_term_count": go_count,
+        "plant_ontology_count": po_count,
+        "plant_reactome_pathways": reactome_pathways,
+        "plant_reactome_reactions_count": len(reactome_reactions),
+        "pdb_structures": pdb,
+        "biogrid_interactions": biogrid,
+        "string_xref": string_xref,
+        "tair_xref": tair,
+        "refseq_xref": refseq,
+        "entrez_xref": entrez,
+        "all_database_counts": {k: len(v) for k, v in by_db.items()},
+        "literature_search_url": pubmed_search_url,
+        "note": (
+            "The evidence tier is a heuristic over cross-reference presence "
+            "— a 'high_curated' tier means UniProt has a hand-reviewed entry "
+            "with cited evidence, NOT that any specific functional claim is "
+            "verified. To verify a specific claim, follow the uniprot_lookup_url "
+            "to the curated function statement and PubMed citations there."
+        ),
+    }
+
+
+@mcp.tool()
 def list_trait_categories() -> dict:
     """List the curated natural-farming-relevant trait categories.
 
@@ -1189,12 +1392,37 @@ def find_trait_genes(trait: str, target_species: str | None = None) -> dict:
             "note": "The trait atlas is intentionally selective. If your trait isn't here, lookup_gene + get_orthologs on a literature-cited gene symbol is the next step.",
         }
 
+    # Enrich each gene with the cached evidence tier from atlas_evidence.json
+    # when available. This is the veracity backbone — populated from a live
+    # Ensembl xref audit (see evals/atlas_audit.py). Absent entries return
+    # None so LLMs see honest "evidence unknown" rather than fabricated tiers.
+    enriched_genes = []
+    high_curated_count = 0
+    for g in entry["genes"]:
+        ev = _evidence_for_gene(g)
+        merged = dict(g)
+        merged["evidence"] = ev  # None when neither ensembl_id nor symbol match
+        if ev and ev.get("evidence_tier") == "high_curated":
+            high_curated_count += 1
+        enriched_genes.append(merged)
+
     result = {
         "trait": matched_key,
         "description": entry["description"],
         "natural_farming_relevance": entry["natural_farming_relevance"],
         "gene_count": len(entry["genes"]),
-        "genes": entry["genes"],
+        "high_curated_gene_count": high_curated_count,
+        "high_curated_fraction": round(high_curated_count / len(entry["genes"]), 2) if entry["genes"] else 0,
+        "evidence_note": (
+            "Each gene's 'evidence' field shows the UniProt/SWISSPROT "
+            "curation tier from a live Ensembl Plants cross-reference "
+            "audit. 'high_curated' means a manually-curated UniProt entry "
+            "with PubMed-cited evidence exists. Call lookup_gene_evidence "
+            "for the full xref chain on any specific gene. None = audit "
+            "could not resolve cross-references; treat the function "
+            "description as a literature handle, not a verified claim."
+        ),
+        "genes": enriched_genes,
     }
     if target_species:
         target = _normalize_species(target_species)
