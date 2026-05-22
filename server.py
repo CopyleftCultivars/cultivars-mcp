@@ -50,6 +50,15 @@ from mcp.server.fastmcp import FastMCP
 KANNAPEDIA_BASE_URL = "https://www.kannapedia.net"
 KANNAPEDIA_STRAIN_URL_PATTERN = KANNAPEDIA_BASE_URL + "/strains/rsp{rsp_id}"
 
+# Additional living-document databases. Each is free, no-auth, REST/JSON.
+# The shared discipline: prefer LIVE queries over static curation. The
+# trait atlas is a starting-point map; these endpoints are the primary
+# sources that domain experts actually trust.
+UNIPROT_BASE_URL = "https://rest.uniprot.org"
+EUROPEPMC_BASE_URL = "https://www.ebi.ac.uk/europepmc/webservices/rest"
+STRING_BASE_URL = "https://string-db.org/api"
+NCBI_DATASETS_BASE_URL = "https://api.ncbi.nlm.nih.gov/datasets/v2"
+
 # Veracity backbone: an evidence map keyed by Ensembl stable ID, populated
 # from `evals/atlas_audit.py` against live Ensembl xrefs. Records the
 # UniProt/SWISSPROT curation tier, GO term count, Plant Reactome pathway
@@ -200,6 +209,23 @@ mcp = FastMCP(
         "Kannapedia, Leafly, SeedFinder, NCBI Taxonomy, EuropePMC. Use "
         "this when the user names a cannabis strain by COMMON name "
         "rather than RSP ID — hand them search links to find the IDs.\n"
+        "Living-document databases beyond Ensembl Plants:\n"
+        "- lookup_uniprot_entry — direct UniProt REST query. Returns "
+        "manually-curated function statement, GO terms WITH EVIDENCE "
+        "CODES, catalytic activity, cofactors, pathway annotations, "
+        "PubMed citations. Works for ANY UniProt-curated protein "
+        "including Cannabis genes (THCAS Q8GTB6, CBDAS A6P6V9, OAC "
+        "I6WU39) which are NOT in Ensembl Plants.\n"
+        "- search_pubmed_for_gene — EuropePMC literature search. Use "
+        "to find recent papers on any plant gene + species; returns "
+        "title, authors, DOI, PMID, open-access status, citation count. "
+        "The 'living' part of literature.\n"
+        "- get_string_interactions — STRING-db protein-protein "
+        "interaction network. Covers Cannabis sativa (taxon 3483). "
+        "Evidence channels: text-mining vs. experimental vs. database "
+        "curation — surface these so the LLM grades interactions.\n"
+        "- compare_cannabis_strains — composed tool batching up to 5 "
+        "Kannapedia strain lookups concurrently for breeder comparison.\n\n"
         "15. list_maize_nam_founders — the 26 maize NAM founder lines "
         "(McMullen 2009 + Hufford 2021 NAM founder genomes). For corn "
         "growers reasoning about heritage maize diversity beyond elite "
@@ -1297,6 +1323,18 @@ def _kannapedia_client() -> httpx.Client:
 _KANNAPEDIA_S3_BASE = "https://mgcdata.s3.amazonaws.com"
 
 
+def _uniprot_client() -> httpx.Client:
+    return httpx.Client(base_url=UNIPROT_BASE_URL, headers={"Accept": "application/json"}, timeout=30)
+
+
+def _europepmc_client() -> httpx.Client:
+    return httpx.Client(base_url=EUROPEPMC_BASE_URL, headers={"Accept": "application/json"}, timeout=30)
+
+
+def _string_client() -> httpx.Client:
+    return httpx.Client(base_url=STRING_BASE_URL, headers={"Accept": "application/json"}, timeout=30)
+
+
 def _parse_kannapedia_strain_html(html: str, rsp_id: str) -> dict:
     """Parse a Kannapedia strain page HTML into structured fields.
 
@@ -1462,6 +1500,81 @@ def lookup_kannapedia_strain(rsp_id: str) -> dict:
         "terms of use; for bulk programmatic access contact them directly."
     )
     return parsed
+
+
+@mcp.tool()
+def compare_cannabis_strains(rsp_ids: list[str]) -> dict:
+    """Compare 2-5 Cannabis strains from Kannapedia side-by-side.
+
+    Composed tool: issues `lookup_kannapedia_strain` concurrently for each
+    RSP ID and returns a unified table comparing chemotype, sex, het, Y-
+    ratio, grower, rarity, and genes flagged on each page. Useful for
+    breeders evaluating parents for a cross, or growers comparing
+    chemotype claims across strains.
+
+    Args:
+        rsp_ids: List of Kannapedia RSP IDs (max 5 per call). Accepts
+                 'rsp13536' or '13536' form.
+
+    Returns: structured comparison + a flagged-genes overlap analysis
+    (genes mentioned on multiple strain pages).
+    """
+    if not rsp_ids:
+        return {"error": "rsp_ids is required (non-empty list)"}
+    if len(rsp_ids) > 5:
+        return {"error": "compare_cannabis_strains accepts at most 5 IDs per call to be polite to Kannapedia."}
+
+    started = time.monotonic()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+        results = list(pool.map(lookup_kannapedia_strain, rsp_ids))
+    elapsed = time.monotonic() - started
+
+    # Gene-mention overlap
+    gene_mentions: dict[str, int] = {}
+    for r in results:
+        for g in r.get("cannabis_genes_mentioned_on_page", []):
+            gene_mentions[g] = gene_mentions.get(g, 0) + 1
+    shared_genes = sorted(g for g, n in gene_mentions.items() if n >= 2)
+
+    # Chemotype distribution
+    chemotypes = {}
+    for r in results:
+        ct = r.get("plant_type_chemotype")
+        if ct:
+            chemotypes[ct] = chemotypes.get(ct, 0) + 1
+
+    # Rarity distribution
+    rarities = {}
+    for r in results:
+        rar = r.get("rarity_classification")
+        if rar:
+            rarities[rar] = rarities.get(rar, 0) + 1
+
+    return {
+        "strain_count": len(results),
+        "elapsed_seconds": round(elapsed, 2),
+        "chemotype_distribution": chemotypes,
+        "rarity_distribution": rarities,
+        "genes_flagged_on_multiple_strains": shared_genes,
+        "comparison": [
+            {
+                "rsp_id": r.get("rsp_id"),
+                "strain_name": r.get("strain_name"),
+                "url": r.get("url"),
+                "chemotype": r.get("plant_type_chemotype"),
+                "plant_sex": r.get("plant_sex"),
+                "heterozygosity": r.get("heterozygosity"),
+                "y_ratio": r.get("y_ratio_distribution"),
+                "grower": r.get("grower"),
+                "rarity": r.get("rarity_classification"),
+                "accession_date": r.get("accession_date"),
+                "genes_on_page": r.get("cannabis_genes_mentioned_on_page", []),
+                "related_strain_count": r.get("related_strain_count"),
+                "error": r.get("error"),
+            }
+            for r in results
+        ],
+    }
 
 
 @mcp.tool()
@@ -1725,6 +1838,333 @@ def lookup_gene_evidence(stable_id: str, species: str | None = None) -> dict:
             "with cited evidence, NOT that any specific functional claim is "
             "verified. To verify a specific claim, follow the uniprot_lookup_url "
             "to the curated function statement and PubMed citations there."
+        ),
+    }
+
+
+@mcp.tool()
+def lookup_uniprot_entry(uniprot_id: str) -> dict:
+    """Pull the manually-curated UniProt entry for a protein.
+
+    Direct UniProt REST query — bypasses Ensembl and works for ANY
+    protein UniProt has curated, including Cannabis genes that aren't
+    in Ensembl Plants. UniProt is the canonical living document for
+    protein function: curators read primary literature and write
+    function statements with PubMed citations + GO terms with
+    evidence codes (EXP / IDA / IPI / IMP / IGI etc. — the strongest
+    levels of GO evidence).
+
+    Critical for plant work because:
+      - All canonical cannabis biosynthesis enzymes (THCAS Q8GTB6,
+        CBDAS A6P6V9, OAC I6WU39, etc.) have UniProt entries even
+        though Cannabis isn't in Ensembl Plants.
+      - UniProt PubMed citations are the trail from a function
+        statement back to the experimental paper that proved it.
+      - GO evidence codes let an agent distinguish "experimentally
+        validated" annotations from "inferred from sequence
+        similarity".
+
+    Args:
+        uniprot_id: UniProt accession, e.g. 'Q8GTB6' (THCAS),
+                    'P14713' (Arabidopsis PHYB), 'Q9LKW9' (SOS1).
+                    Find these via lookup_gene_evidence or directly
+                    from the atlas evidence field.
+
+    Returns: function statement, protein name, organism, sequence
+    length, GO term count (with evidence codes), PubMed citations,
+    pathway / catalytic activity / cofactor / domain annotations
+    where present, and the canonical UniProt URL.
+    """
+    uid = (uniprot_id or "").strip()
+    if not uid:
+        return {"error": "uniprot_id is required"}
+
+    with _uniprot_client() as client:
+        try:
+            resp = client.get(f"/uniprotkb/{uid}")
+        except httpx.HTTPError as e:
+            return {"error": f"UniProt fetch failed: {e}", "uniprot_id": uid}
+        if resp.status_code == 404:
+            return {"error": "UniProt entry not found", "uniprot_id": uid}
+        resp.raise_for_status()
+        data = resp.json()
+
+    # Extract function statement (CC FUNCTION)
+    function_statements = []
+    pathway_statements = []
+    catalytic_activities = []
+    cofactors = []
+    for c in data.get("comments", []):
+        ctype = c.get("commentType")
+        if ctype == "FUNCTION":
+            for t in c.get("texts", []):
+                function_statements.append(t.get("value", "").strip())
+        elif ctype == "PATHWAY":
+            for t in c.get("texts", []):
+                pathway_statements.append(t.get("value", "").strip())
+        elif ctype == "CATALYTIC ACTIVITY":
+            r = c.get("reaction", {})
+            if r:
+                catalytic_activities.append({
+                    "reaction": r.get("name"),
+                    "ecNumber": r.get("ecNumber"),
+                })
+        elif ctype == "COFACTOR":
+            for cof in c.get("cofactors", []):
+                cofactors.append(cof.get("name"))
+
+    # Extract GO terms with evidence codes
+    go_terms = []
+    for x in data.get("uniProtKBCrossReferences", []):
+        if x.get("database") == "GO":
+            term_name = next((p["value"] for p in x.get("properties", []) if p.get("key") == "GoTerm"), None)
+            evidence = next((p["value"] for p in x.get("properties", []) if p.get("key") == "GoEvidenceType"), None)
+            go_terms.append({
+                "id": x.get("id"),
+                "term": term_name,
+                "evidence": evidence,
+            })
+
+    # Extract PubMed citations
+    pubmed_ids = []
+    for ref in data.get("references", []):
+        cit = ref.get("citation", {})
+        for xref in cit.get("citationCrossReferences", []):
+            if xref.get("database") == "PubMed":
+                pubmed_ids.append(xref.get("id"))
+
+    # Organism
+    org = data.get("organism", {})
+    organism_name = org.get("scientificName")
+    common_name = org.get("commonName")
+
+    # Names
+    pn = data.get("proteinDescription", {})
+    recommended_name = (pn.get("recommendedName") or {}).get("fullName", {}).get("value")
+    gene_names = []
+    for g in data.get("genes", []):
+        if g.get("geneName"):
+            gene_names.append(g["geneName"].get("value"))
+
+    # Sequence
+    seq_info = data.get("sequence", {})
+
+    return {
+        "uniprot_id": data.get("primaryAccession"),
+        "secondary_accessions": data.get("secondaryAccessions") or [],
+        "entry_name": data.get("uniProtkbId"),
+        "review_status": "SwissProt (manually curated)" if data.get("entryType") == "UniProtKB reviewed (Swiss-Prot)" else "TrEMBL (auto-annotated)",
+        "protein_name": recommended_name,
+        "gene_names": gene_names,
+        "organism": organism_name,
+        "organism_common_name": common_name,
+        "sequence_length": seq_info.get("length"),
+        "sequence_md5": seq_info.get("md5"),
+        "function": function_statements,
+        "catalytic_activities": catalytic_activities,
+        "cofactors": cofactors,
+        "pathways": pathway_statements,
+        "go_term_count": len(go_terms),
+        "go_terms": go_terms[:40],  # cap for response size
+        "pubmed_citation_count": len(pubmed_ids),
+        "pubmed_ids": pubmed_ids[:30],
+        "uniprot_url": f"https://www.uniprot.org/uniprotkb/{uid}",
+        "literature_search_url": f"https://europepmc.org/search?query={uid}",
+        "note": (
+            "UniProt is the canonical curated protein function database. "
+            "GO evidence codes carry the strength: EXP/IDA/IPI/IMP/IGI = "
+            "experimentally validated; IEA/ISS = inferred. Function "
+            "statements are written by curators from primary literature; "
+            "follow the pubmed_ids to the source papers."
+        ),
+    }
+
+
+@mcp.tool()
+def search_pubmed_for_gene(query: str, page_size: int = 10) -> dict:
+    """Search Europe PMC for recent literature on a plant gene / trait / species.
+
+    Europe PMC (EBI's open-access PubMed mirror + preprint integration) is
+    the living-document literature backbone — when you need to verify a
+    claim with a paper newer than the trait atlas, or hunt down the
+    seminal characterization paper for a gene the atlas doesn't cover,
+    this is the search.
+
+    Returns ranked hits with title + authors + journal + year + DOI +
+    open-access status + abstract availability. Direct EuropePMC URLs.
+
+    Args:
+        query: Free-text query. Best practice: gene symbol + species,
+               e.g. 'OsNRT1.1B rice', 'CsTPS9 cannabis', 'DREB1A
+               Arabidopsis drought'. Multi-word queries are AND-ed.
+        page_size: Number of hits to return (default 10, max 25).
+    """
+    q = (query or "").strip()
+    if not q:
+        return {"error": "query is required"}
+    page_size = min(max(1, page_size), 25)
+
+    with _europepmc_client() as client:
+        try:
+            resp = client.get("/search", params={
+                "query": q,
+                "format": "json",
+                "resultType": "lite",
+                "pageSize": str(page_size),
+            })
+        except httpx.HTTPError as e:
+            return {"error": f"EuropePMC fetch failed: {e}", "query": q}
+        if resp.status_code >= 400:
+            return {"error": f"EuropePMC returned {resp.status_code}", "query": q}
+        data = resp.json()
+
+    results = []
+    for r in (data.get("resultList") or {}).get("result", []):
+        pmid = r.get("pmid")
+        results.append({
+            "title": r.get("title"),
+            "authors": r.get("authorString"),
+            "journal": r.get("journalTitle"),
+            "year": r.get("pubYear"),
+            "pmid": pmid,
+            "pmcid": r.get("pmcid"),
+            "doi": r.get("doi"),
+            "is_open_access": r.get("isOpenAccess") == "Y",
+            "pub_type": r.get("pubType"),
+            "cited_by_count": r.get("citedByCount", 0),
+            "europepmc_url": f"https://europepmc.org/article/MED/{pmid}" if pmid else None,
+            "pubmed_url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/" if pmid else None,
+            "doi_url": f"https://doi.org/{r.get('doi')}" if r.get("doi") else None,
+        })
+
+    return {
+        "query": q,
+        "total_hits": data.get("hitCount", 0),
+        "returned_hits": len(results),
+        "results": results,
+        "europepmc_search_url": f"https://europepmc.org/search?query={q.replace(' ', '+')}",
+        "note": (
+            "Europe PMC indexes PubMed + Agricola + Patents + preprints. "
+            "Open-access full text available in PMC for is_open_access=true "
+            "entries. citedByCount is a rough impact signal but not a "
+            "veracity guarantee — read the paper."
+        ),
+    }
+
+
+# NCBI taxon IDs of common plant species — used for STRING-db queries which
+# require a numeric NCBI Taxonomy ID rather than the Ensembl species name.
+_NCBI_TAXON_IDS = {
+    "arabidopsis_thaliana": 3702,
+    "oryza_sativa": 4530,         # rice (japonica via 39947, generic 4530)
+    "oryza_indica": 39946,
+    "zea_mays": 4577,
+    "sorghum_bicolor": 4558,
+    "triticum_aestivum": 4565,
+    "hordeum_vulgare": 4513,
+    "glycine_max": 3847,
+    "phaseolus_vulgaris": 3885,
+    "solanum_lycopersicum": 4081,
+    "solanum_tuberosum": 4113,
+    "vitis_vinifera": 29760,
+    "manihot_esculenta": 3983,
+    "medicago_truncatula": 3880,
+    "brassica_napus": 3708,
+    "brassica_rapa": 3711,
+    "helianthus_annuus": 4232,
+    "cannabis_sativa": 3483,      # STRING covers Cannabis sativa even though Ensembl Plants doesn't
+}
+
+
+@mcp.tool()
+def get_string_interactions(
+    protein_id: str,
+    species: str | None = None,
+    score_threshold: int = 400,
+    limit: int = 25,
+) -> dict:
+    """Pull the STRING-db protein-protein interaction network for a plant gene.
+
+    STRING (https://string-db.org/) is the canonical living document of
+    protein-protein associations across the tree of life. Evidence
+    channels: neighborhood, gene fusion, phylogenetic co-occurrence,
+    coexpression, experimental, database curation, text mining.
+
+    Importantly STRING covers Cannabis sativa (taxon 3483) even though
+    Ensembl Plants does not — so this tool also serves cannabis genes.
+
+    Args:
+        protein_id: Stable ID OR symbol — STRING resolves both. Examples:
+                    'AT2G18790' (Arabidopsis PHYB), 'PHYB',
+                    'Q8GTB6' (THCAS UniProt), 'THCAS'.
+        species: Ensembl-style species name (auto-mapped to NCBI taxon
+                 via the lookup table). Defaults to arabidopsis_thaliana.
+        score_threshold: STRING combined-score cutoff [0-1000]. 400 =
+                         medium confidence (default), 700 = high, 900
+                         = highest.
+        limit: Max interactions to return (default 25, max 100).
+    """
+    p = (protein_id or "").strip()
+    if not p:
+        return {"error": "protein_id is required"}
+    sp = _normalize_species(species)
+    taxon = _NCBI_TAXON_IDS.get(sp)
+    if not taxon:
+        return {
+            "error": f"No NCBI taxon ID known for species {sp!r}",
+            "supported_species": sorted(_NCBI_TAXON_IDS.keys()),
+            "hint": "Add the species to _NCBI_TAXON_IDS in server.py or query NCBI Taxonomy for the ID and pass it manually.",
+        }
+    score_threshold = min(max(0, score_threshold), 1000)
+    limit = min(max(1, limit), 100)
+
+    with _string_client() as client:
+        try:
+            resp = client.get("/json/network", params={
+                "identifiers": p,
+                "species": str(taxon),
+                "required_score": str(score_threshold),
+                "limit": str(limit),
+            })
+        except httpx.HTTPError as e:
+            return {"error": f"STRING-db fetch failed: {e}", "protein_id": p}
+        if resp.status_code >= 400:
+            return {"error": f"STRING-db returned {resp.status_code}", "protein_id": p, "response": resp.text[:200]}
+        edges = resp.json()
+
+    interactions = []
+    for e in edges:
+        interactions.append({
+            "partner_id": e.get("stringId_B"),
+            "partner_symbol": e.get("preferredName_B"),
+            "combined_score": e.get("score"),
+            "evidence_channels": {
+                "neighborhood": e.get("nscore"),
+                "fusion": e.get("fscore"),
+                "phylogenetic": e.get("pscore"),
+                "coexpression": e.get("ascore"),
+                "experimental": e.get("escore"),
+                "database": e.get("dscore"),
+                "textmining": e.get("tscore"),
+            },
+        })
+
+    interactions.sort(key=lambda i: -(i["combined_score"] or 0))
+
+    return {
+        "query_protein": p,
+        "species": sp,
+        "ncbi_taxon_id": taxon,
+        "score_threshold": score_threshold,
+        "interaction_count": len(interactions),
+        "interactions": interactions,
+        "string_url": f"https://string-db.org/cgi/network?identifiers={p}&species={taxon}",
+        "note": (
+            "Combined score 0-1000. Highest-scoring channel is the "
+            "dominant evidence type. Text-mining-only edges (tscore high, "
+            "others ~0) are weaker than experimental + database curation. "
+            "STRING covers Cannabis sativa (taxon 3483) even though "
+            "Ensembl Plants does not — so this tool serves cannabis genes."
         ),
     }
 

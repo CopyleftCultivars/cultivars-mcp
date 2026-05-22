@@ -857,6 +857,220 @@ def test_kannapedia_strain_404(monkeypatch):
     assert "kannapedia.net" in out["url"]
 
 
+def test_compare_cannabis_strains_basic(monkeypatch):
+    """Mock 3 strain pages, assert overlap analysis."""
+    pages = {
+        "rsp1001": _KANNAPEDIA_SAMPLE_HTML.replace("RSP99999", "RSP1001").replace("Type II", "Type I"),
+        "rsp1002": _KANNAPEDIA_SAMPLE_HTML.replace("RSP99999", "RSP1002").replace("Type II", "Type III"),
+        "rsp1003": _KANNAPEDIA_SAMPLE_HTML.replace("RSP99999", "RSP1003"),  # Type II
+    }
+    def handler(req: httpx.Request) -> httpx.Response:
+        for sid, html in pages.items():
+            if sid in req.url.path:
+                return httpx.Response(200, text=html)
+        return httpx.Response(404, text="not found")
+    monkeypatch.setattr(server, "_kannapedia_client", lambda: _kannapedia_factory(handler)())
+    out = server.compare_cannabis_strains(rsp_ids=["1001", "1002", "1003"])
+    assert out["strain_count"] == 3
+    # Each sample HTML has chemotype set; should distribute across the three types
+    assert sum(out["chemotype_distribution"].values()) == 3
+    # Genes appear on all three pages (mocked HTML), so should be in overlap
+    assert "THCAS" in out["genes_flagged_on_multiple_strains"]
+
+
+def test_compare_cannabis_strains_too_many():
+    out = server.compare_cannabis_strains(rsp_ids=[str(i) for i in range(10)])
+    assert "error" in out
+
+
+def test_compare_cannabis_strains_empty():
+    out = server.compare_cannabis_strains(rsp_ids=[])
+    assert "error" in out
+
+
+# ---------------------------------------------------------------------------
+# UniProt direct lookup
+# ---------------------------------------------------------------------------
+
+
+_UNIPROT_SAMPLE = {
+    "primaryAccession": "Q8GTB6",
+    "secondaryAccessions": [],
+    "uniProtkbId": "THCAS_CANSA",
+    "entryType": "UniProtKB reviewed (Swiss-Prot)",
+    "proteinDescription": {
+        "recommendedName": {"fullName": {"value": "Tetrahydrocannabinolic acid synthase"}}
+    },
+    "genes": [{"geneName": {"value": "THCAS"}}],
+    "organism": {"scientificName": "Cannabis sativa", "commonName": "Hemp"},
+    "sequence": {"length": 545, "md5": "abc123"},
+    "comments": [
+        {"commentType": "FUNCTION", "texts": [{"value": "Oxidoreductase in cannabinoid biosynthesis"}]},
+        {"commentType": "CATALYTIC ACTIVITY", "reaction": {"name": "CBGA -> THCA", "ecNumber": "1.21.3.7"}},
+        {"commentType": "COFACTOR", "cofactors": [{"name": "FAD"}]},
+        {"commentType": "PATHWAY", "texts": [{"value": "Cannabinoid biosynthesis"}]},
+    ],
+    "uniProtKBCrossReferences": [
+        {"database": "GO", "id": "GO:0048046", "properties": [{"key": "GoTerm", "value": "C:apoplast"}, {"key": "GoEvidenceType", "value": "IDA"}]},
+        {"database": "GO", "id": "GO:0102778", "properties": [{"key": "GoTerm", "value": "F:THCA synthase"}, {"key": "GoEvidenceType", "value": "EXP"}]},
+    ],
+    "references": [
+        {"citation": {"citationCrossReferences": [{"database": "PubMed", "id": "15190053"}]}},
+        {"citation": {"citationCrossReferences": [{"database": "PubMed", "id": "16143478"}]}},
+    ],
+}
+
+
+def _patch_helper(monkeypatch, helper_name: str, base_url: str, handler):
+    """Patch one of the per-API client-factory helpers with a mock transport."""
+    def factory():
+        return httpx.Client(
+            base_url=base_url,
+            transport=httpx.MockTransport(handler),
+            timeout=5,
+        )
+    monkeypatch.setattr(server, helper_name, factory)
+
+
+def test_lookup_uniprot_thcas(monkeypatch):
+    _patch_helper(monkeypatch, "_uniprot_client", server.UNIPROT_BASE_URL,
+                  lambda req: _json(_UNIPROT_SAMPLE))
+    out = server.lookup_uniprot_entry(uniprot_id="Q8GTB6")
+    assert out["uniprot_id"] == "Q8GTB6"
+    assert out["protein_name"] == "Tetrahydrocannabinolic acid synthase"
+    assert out["organism"] == "Cannabis sativa"
+    assert "SwissProt" in out["review_status"]
+    assert "Oxidoreductase" in out["function"][0]
+    assert out["catalytic_activities"][0]["ecNumber"] == "1.21.3.7"
+    assert "FAD" in out["cofactors"]
+    assert out["go_term_count"] == 2
+    assert out["pubmed_citation_count"] == 2
+    assert "15190053" in out["pubmed_ids"]
+    assert out["uniprot_url"] == "https://www.uniprot.org/uniprotkb/Q8GTB6"
+
+
+def test_lookup_uniprot_empty_id():
+    out = server.lookup_uniprot_entry(uniprot_id="")
+    assert "error" in out
+
+
+# ---------------------------------------------------------------------------
+# EuropePMC literature search
+# ---------------------------------------------------------------------------
+
+
+_EUROPEPMC_SAMPLE = {
+    "hitCount": 190,
+    "resultList": {"result": [
+        {
+            "id": "40899604", "pmid": "40899604", "pmcid": "PMC12631913",
+            "doi": "10.1002/advs.202507919",
+            "title": "OsNRT1.1B-OsCNGC14/16-Ca2+-OsNLP3 Pathway",
+            "authorString": "Wang X, Liu Y, Li W",
+            "journalTitle": "Adv Sci",
+            "pubYear": "2025",
+            "isOpenAccess": "Y",
+            "pubType": "journal article",
+            "citedByCount": 5,
+        },
+        {
+            "id": "26053497", "pmid": "26053497",
+            "doi": "10.1038/ng.3337",
+            "title": "Variation in NRT1.1B contributes to nitrate-use divergence",
+            "authorString": "Hu B et al.",
+            "journalTitle": "Nat Genet",
+            "pubYear": "2015",
+            "isOpenAccess": "N",
+            "citedByCount": 320,
+        },
+    ]},
+}
+
+
+def test_search_pubmed_basic(monkeypatch):
+    _patch_helper(monkeypatch, "_europepmc_client", server.EUROPEPMC_BASE_URL,
+                  lambda req: _json(_EUROPEPMC_SAMPLE))
+    out = server.search_pubmed_for_gene(query="OsNRT1.1B rice")
+    assert out["total_hits"] == 190
+    assert len(out["results"]) == 2
+    first = out["results"][0]
+    assert first["pmid"] == "40899604"
+    assert first["is_open_access"] is True
+    assert first["europepmc_url"] == "https://europepmc.org/article/MED/40899604"
+    assert first["doi_url"] == "https://doi.org/10.1002/advs.202507919"
+
+
+def test_search_pubmed_empty_query():
+    out = server.search_pubmed_for_gene(query="")
+    assert "error" in out
+
+
+def test_search_pubmed_page_size_clamps(monkeypatch):
+    captured = {}
+    def h(req):
+        captured.update(dict(req.url.params))
+        return _json(_EUROPEPMC_SAMPLE)
+    _patch_helper(monkeypatch, "_europepmc_client", server.EUROPEPMC_BASE_URL, h)
+    server.search_pubmed_for_gene(query="x", page_size=500)
+    assert int(captured.get("pageSize", 0)) <= 25
+
+
+# ---------------------------------------------------------------------------
+# STRING-db protein-protein interactions
+# ---------------------------------------------------------------------------
+
+
+_STRING_SAMPLE = [
+    {
+        "stringId_A": "3702.AT2G18790",
+        "stringId_B": "3702.O80536",
+        "preferredName_A": "PHYB",
+        "preferredName_B": "PIF3",
+        "ncbiTaxonId": "3702",
+        "score": 0.999,
+        "nscore": 0, "fscore": 0, "pscore": 0, "ascore": 0,
+        "escore": 0.95, "dscore": 0.9, "tscore": 0.98,
+    },
+    {
+        "stringId_A": "3702.AT2G18790",
+        "stringId_B": "3702.Q570R7",
+        "preferredName_A": "PHYB",
+        "preferredName_B": "PIF4",
+        "ncbiTaxonId": "3702",
+        "score": 0.95,
+        "nscore": 0, "fscore": 0, "pscore": 0, "ascore": 0.2,
+        "escore": 0.8, "dscore": 0.5, "tscore": 0.9,
+    },
+]
+
+
+def test_string_interactions_basic(monkeypatch):
+    _patch_helper(monkeypatch, "_string_client", server.STRING_BASE_URL,
+                  lambda req: _json(_STRING_SAMPLE))
+    out = server.get_string_interactions(protein_id="PHYB", species="arabidopsis_thaliana", limit=5)
+    assert out["interaction_count"] == 2
+    assert out["interactions"][0]["partner_symbol"] == "PIF3"
+    assert out["interactions"][0]["combined_score"] == 0.999
+    assert out["interactions"][0]["evidence_channels"]["textmining"] == 0.98
+
+
+def test_string_unsupported_species():
+    out = server.get_string_interactions(protein_id="X", species="some_unknown_plant")
+    assert "error" in out
+    assert "supported_species" in out
+
+
+def test_string_cannabis_is_supported():
+    """Cannabis sativa must be in our taxon map — it's the whole point."""
+    assert "cannabis_sativa" in server._NCBI_TAXON_IDS
+    assert server._NCBI_TAXON_IDS["cannabis_sativa"] == 3483
+
+
+def test_string_empty_id():
+    out = server.get_string_interactions(protein_id="")
+    assert "error" in out
+
+
 def test_cannabis_strain_search_urls_constructs():
     out = server.cannabis_strain_search_urls(query="Northern Lights")
     assert "kannapedia" in out["search_urls"]
