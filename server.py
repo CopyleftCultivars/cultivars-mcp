@@ -1,12 +1,34 @@
 """
-EVEE MCP Server — Evo Variant Effect Explorer
+Cultivars MCP Server — Plant Genomics for the Commons
 
-Provides tools for querying the EVEE API, which offers interpretable variant
-effect predictions from Evo 2 genomic foundation model embeddings for 4.2 million
-ClinVar variants.
+An open tool for grower-scientists exploring the genomic basis of plant
+traits that matter to natural farming, regenerative agriculture, and
+heritage seed stewardship: stress tolerance, root architecture, microbial
+symbiosis, secondary metabolites, nutrient uptake, allelopathy.
 
-Reference: Pearce et al., "EVEE: Interpretable variant effect prediction from
-genomic foundation model embeddings" (2026). https://evee.goodfire.ai
+Backed by the Ensembl Plants REST API (https://plants.ensembl.org/) —
+chosen because it is free, no-auth, public-sector-funded, and serves all
+~80 plant genomes uniformly. Tooling like Phytozome paywalls behind login;
+this fork deliberately avoids those.
+
+This is a fork of the EVEE MCP server (human clinical variants from the
+Goodfire EVEE API). It is part of the Copyleft Cultivars ecosystem
+(https://github.com/CopyleftCultivars), whose mission is to democratize
+agricultural knowledge for resource-limited farmers and grower-scientists.
+Companion projects:
+  - TinyLLamaFarmer — an offline natural-farming AI assistant
+  - gemma4-natural-farming — open-weight Gemma 4 fine-tuned on Korean
+    Natural Farming, JADAM, and regenerative agriculture literature
+
+Honest tension: Copyleft Cultivars's flagship tools are offline-first
+(designed to work in the field, off-grid). This MCP server calls a remote
+REST API and therefore needs connectivity. Treat it as the desk-side
+research companion, not the field tool. Cache results locally where
+possible.
+
+Genomics is one lens. Indigenous knowledge, farmer observation, on-farm
+trials, and natural-farming holism remain the other lenses. This tool
+does not replace them.
 """
 
 import time
@@ -14,339 +36,140 @@ import time
 import httpx
 from mcp.server.fastmcp import FastMCP
 
-BASE_URL = "https://xix0d0o8le.execute-api.us-east-1.amazonaws.com"
+BASE_URL = "https://rest.ensembl.org"
+DEFAULT_SPECIES = "arabidopsis_thaliana"
 
-mcp = FastMCP(
-    "evee",
-    instructions=(
-        "EVEE (Evo Variant Effect Explorer) provides variant effect predictions "
-        "for 4.2 million ClinVar variants using Evo 2 genomic foundation model "
-        "embeddings. It predicts pathogenicity (0.997 AUROC on ClinVar SNVs), "
-        "generates disruption profiles showing which biological annotations are "
-        "affected, and produces AI-generated mechanistic interpretations.\n\n"
-        "Typical workflow:\n"
-        "1. search_variants — autocomplete-style lookup returning up to 6 matches. "
-        "Pass ONLY a gene name (e.g. 'BRCA1'), rsID (e.g. 'rs1234'), or numeric "
-        "ClinVar variation ID (e.g. '655979'). Do NOT add keywords like "
-        "'pathogenic' or 'missense' — it is a lookup, not a text search. "
-        "WARNING: gene-name queries return an adjacent-position autocomplete slice "
-        "of that gene's variants, NOT the top-pathogenicity variants. Do not infer "
-        "the gene's pathogenic landscape from these 6 rows. For a specific variant, "
-        "query by rsID or ClinVar variation ID.\n"
-        "2. get_variant — clinical significance, scores, and interpretation "
-        "(auto-triggers on-demand analysis when not yet stored)\n"
-        "3. compare_variants — side-by-side for 2-10 variants in one call\n"
-        "4. get_variant_disruptions — understand WHY a variant is predicted "
-        "pathogenic/benign; optional category filter\n"
-        "5. get_variant_annotations — deep dive into specific annotation categories\n"
-        "6. wait_for_variant_analysis — poll on-demand interpretation to "
-        "completion for variants where the stored result isn't ready\n\n"
-        "Variant IDs use the format chr:pos:ref:alt.\n\n"
-        "IMPORTANT — coordinate convention: EVEE stores variants at 0-based "
-        "positions, while ClinVar VCFs, HGVS genomic notation, and standard VCF "
-        "files are 1-based. To look up a ClinVar variant at 1-based position P, "
-        "query chr{c}:{P-1}:{ref}:{alt}. Example: ClinVar ID 41812 is stored in "
-        "EVEE as 'chr17:43092918:G:A' even though CLNHGVS says g.43092919G>A. "
-        "For indels the offset is NOT a simple -1 — EVEE stores indels in "
-        "VCF-anchored bi-allelic form (e.g. CFTR ΔF508 is chr7:117559589:ATCT:A, "
-        "several positions upstream of the ClinVar HGVS position). When you only "
-        "have a ClinVar variation ID or rsID, prefer search_variants over "
-        "building the ID by hand — it returns the correctly-formed variant_id."
-    ),
-)
-
-# ---------------------------------------------------------------------------
-# Annotation category mapping
-# ---------------------------------------------------------------------------
-
-# Maps user-facing category names to the key prefixes used in the API response.
-ANNOTATION_CATEGORIES = {
-    "amino_acid": {
-        "prefixes": ["amino_acid_"],
-        "description": "Predicted amino acid probabilities at the variant position (20 standard amino acids)",
+# Species Ensembl Plants does NOT currently carry, but that matter to
+# Copyleft Cultivars's audience. Hitting these returns a structured pointer
+# to community resources rather than a confusing 404.
+COMMUNITY_RESOURCES = {
+    "cannabis_sativa": {
+        "common_name": "Cannabis",
+        "reason": "Cannabis sativa is not in Ensembl Plants (federal-research-funding constraints have historically kept Cannabis out of public plant-genomics infrastructure).",
+        "alternatives": [
+            "NCBI Genome: https://www.ncbi.nlm.nih.gov/genome/?term=cannabis+sativa",
+            "Cannabis Genome DB (community): https://www.cannabisgenome.org/",
+            "CS10 reference (Grassa et al. 2021): NCBI GCF_900626175.2",
+            "JGI Phytozome has draft Cannabis sativa assemblies (login required).",
+        ],
     },
-    "atacseq": {
-        "prefixes": ["atacseq_"],
-        "description": "ATAC-seq chromatin accessibility peaks across 7 tissues/cell types",
+    "cannabis": {
+        "common_name": "Cannabis",
+        "reason": "Cannabis sativa is not in Ensembl Plants. Use the Ensembl name 'cannabis_sativa' if Ensembl ever adds it; for now see alternatives.",
+        "alternatives": [
+            "NCBI Genome: https://www.ncbi.nlm.nih.gov/genome/?term=cannabis+sativa",
+            "Cannabis Genome DB (community): https://www.cannabisgenome.org/",
+        ],
     },
-    "ccre": {
-        "prefixes": ["ccre_"],
-        "description": "ENCODE candidate cis-regulatory element annotations (enhancers, promoters, CTCF, etc.)",
-    },
-    "chipseq": {
-        "prefixes": ["chipseq_"],
-        "description": "ChIP-seq histone modification peaks (H3K27ac, H3K27me3, H3K36me3, H3K4me1, H3K4me3, H3K9me3) across tissues",
-    },
-    "chromhmm": {
-        "prefixes": ["chromhmm_"],
-        "description": "ChromHMM chromatin state predictions (active TSS, bivalent, enhancer, repressed, transcribed) across 10 cell types",
-    },
-    "elm": {
-        "prefixes": ["elm_"],
-        "description": "Eukaryotic Linear Motif predictions (DOC, LIG, MOD, TRG)",
-    },
-    "fstack": {
-        "prefixes": ["fstack_"],
-        "description": "FStack functional state predictions (enhancer, promoter, quiescent, repressed, transcribed)",
-    },
-    "protein_feature": {
-        "prefixes": ["in_"],
-        "description": "Protein structural features from UniProt (domain, disulfide bond, transmembrane, coiled coil, active/binding sites, etc.)",
-    },
-    "interpro": {
-        "prefixes": ["interpro_"],
-        "description": "InterPro protein domain family predictions (117 domain types)",
-    },
-    "genomic_feature": {
-        "prefixes": ["is_"],
-        "description": "Binary genomic feature flags (splice donor/acceptor, CpG island, repeat elements, exon-intron boundaries, etc.)",
-    },
-    "ptm": {
-        "prefixes": ["ptm_"],
-        "description": "Post-translational modification predictions (acetylation, glycosylation, methylation, phosphorylation, sumoylation, ubiquitination)",
-    },
-    "region": {
-        "prefixes": ["region_"],
-        "description": "Genomic region annotations (CDS, intron, 3'UTR, 5'UTR)",
-    },
-    "secondary_structure": {
-        "prefixes": ["secondary_structure_"],
-        "description": "Protein secondary structure predictions (C=coil, E=strand, H=helix)",
+    "psilocybe_cubensis": {
+        "common_name": "Psilocybe (fungi, not plants)",
+        "reason": "Psilocybe is a fungus, not a plant, and is out of scope for Ensembl Plants. See Ensembl Fungi for fungal genomics.",
+        "alternatives": [
+            "Ensembl Fungi REST: https://rest.ensembl.org/ (use division=EnsemblFungi)",
+            "MycoCosm (JGI): https://mycocosm.jgi.doe.gov/",
+        ],
     },
 }
 
+mcp = FastMCP(
+    "cultivars",
+    instructions=(
+        "Cultivars wraps the Ensembl Plants REST API to support "
+        "grower-scientists, heritage breeders, and natural-farming "
+        "researchers working with the open plant-genomics commons. "
+        "It is part of the Copyleft Cultivars ecosystem alongside "
+        "TinyLLamaFarmer (offline natural-farming assistant) and the "
+        "gemma4-natural-farming model.\n\n"
+        "It covers ~80 plant species. It is NOT clinical: there are no "
+        "curated pathogenicity labels — variant effects come from VEP "
+        "(rule-based predictor on Ensembl gene models), not a "
+        "foundation model.\n\n"
+        "Cannabis sativa is NOT currently in Ensembl Plants — when a user "
+        "asks about cannabis, surface that gap honestly and point them to "
+        "the NCBI Cannabis sativa reference (CS10) or community databases. "
+        "The tools handle this gracefully: passing species='cannabis_sativa' "
+        "returns a structured fallback with alternative resources.\n\n"
+        "Typical workflows:\n"
+        "1. list_plant_species — discover available species (returns the "
+        "Ensembl 'name' you must pass as the species argument elsewhere, "
+        "e.g. 'arabidopsis_thaliana', 'oryza_sativa', 'zea_mays', "
+        "'solanum_lycopersicum', 'sorghum_bicolor', 'manihot_esculenta' "
+        "for cassava).\n"
+        "2. lookup_gene — find a gene by symbol (e.g. 'PHYB', 'DREB1A', "
+        "'OsNRT1.1B') or stable ID (e.g. 'AT2G18790').\n"
+        "3. search_variants_in_region — list known variants in a genomic "
+        "region. Coverage is rich for crops studied at scale (1001 "
+        "Genomes / Arabidopsis, 3K Rice Genomes / rice) and sparse or "
+        "empty for orphan crops.\n"
+        "4. get_variant — retrieve one known variant by stable ID.\n"
+        "5. predict_variant_effect — run VEP for a region+allele or a "
+        "known variant ID; returns per-transcript consequences and impact.\n"
+        "6. compare_variants — summary across 2-10 variants in one call.\n"
+        "7. get_orthologs — translate a finding from Arabidopsis (the "
+        "model) into rice, maize, sorghum, common bean, cassava, etc. "
+        "via the Ensembl Compara plant tree. Essential for grower-"
+        "scientists working with heritage crops where the molecular "
+        "literature is sparse.\n"
+        "8. get_sequence — fetch genomic / cDNA / CDS / protein sequence.\n\n"
+        "Coordinate convention: Ensembl is 1-based, fully-closed (same as "
+        "VCF / GFF). Region strings are 'chrom:start-end' with optional "
+        "':strand' (default +1). No 'chr' prefix on plant chromosomes — "
+        "Arabidopsis TAIR10 uses '1'..'5', 'Mt', 'Pt'.\n\n"
+        "Species names: lowercase underscored Ensembl form, e.g. "
+        "'arabidopsis_thaliana'. Call list_plant_species if unsure.\n\n"
+        "Honest framing: this tool needs internet (it hits a REST API). "
+        "Copyleft Cultivars's offline-first tools — TinyLLamaFarmer, "
+        "gemma4-natural-farming — are the field companions. Cultivars "
+        "is the desk-side research companion. Genomics is one lens; "
+        "farmer observation, indigenous knowledge, and on-farm trials "
+        "remain the other lenses, and this tool does not replace them."
+    ),
+)
+
+
+def _community_fallback(species: str, tool: str) -> dict | None:
+    """If the species is one we don't serve from Ensembl Plants but matters
+    to the Copyleft Cultivars audience, return a structured pointer."""
+    info = COMMUNITY_RESOURCES.get(species)
+    if not info:
+        return None
+    return {
+        "species": species,
+        "tool": tool,
+        "available_in_ensembl_plants": False,
+        "common_name": info["common_name"],
+        "reason": info["reason"],
+        "alternatives": info["alternatives"],
+        "note": "Ensembl Plants does not carry this species. The Copyleft Cultivars project flags it explicitly because of the gap in public-sector plant-genomics infrastructure.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# HTTP helpers
+# ---------------------------------------------------------------------------
+
+_JSON_HEADERS = {"Accept": "application/json"}
+
 
 def _get_client() -> httpx.Client:
-    return httpx.Client(base_url=BASE_URL, timeout=30)
+    return httpx.Client(base_url=BASE_URL, headers=_JSON_HEADERS, timeout=30)
 
 
-def _evee_url(variant_id: str | None) -> str | None:
-    return f"https://evee.goodfire.ai/#/variant/{variant_id}" if variant_id else None
-
-
-def _fetch_analysis(client: httpx.Client, variant_id: str, timeout: float | None = None) -> dict:
-    """Hit /variants/{id}/analysis once.
-
-    Returns one of:
-      {"status": "complete", "result": {...}}         — interpretation ready
-      {"status": "queued", "retry_after": N}          — generation in progress
-      {"status": "not_found"}                         — variant missing
-    """
-    kwargs = {"timeout": timeout} if timeout is not None else {}
-    resp = client.get(f"/variants/{variant_id}/analysis", **kwargs)
-    if resp.status_code == 404:
-        return {"status": "not_found"}
-    resp.raise_for_status()
-    return resp.json()
-
-
-def _interpretation_from_analysis(analysis: dict) -> dict | None:
-    """Build the curated `interpretation` dict from an /analysis response."""
-    if analysis.get("status") != "complete":
+def _ensembl_gene_url(species: str, gene_id: str | None) -> str | None:
+    if not gene_id:
         return None
-    r = analysis.get("result") or {}
-    return {
-        "summary": r.get("summary"),
-        "mechanism": r.get("mechanism"),
-        "key_evidence": r.get("key_evidence"),
-        "confidence": r.get("confidence"),
-    }
+    return f"https://plants.ensembl.org/{species}/Gene/Summary?g={gene_id}"
 
 
-def _extract_annotations(data: dict, category: str | None) -> dict:
-    """Extract ref/var annotation pairs from the variant response, optionally filtered by category."""
-    if category and category not in ANNOTATION_CATEGORIES:
-        return {"error": f"Unknown category '{category}'. Valid categories: {', '.join(sorted(ANNOTATION_CATEGORIES))}"}
-
-    if category:
-        prefixes = ANNOTATION_CATEGORIES[category]["prefixes"]
-    else:
-        prefixes = None
-
-    ref_keys = sorted(k for k in data if k.startswith("ref_") and not k[0].isdigit())
-    annotations = {}
-    for rk in ref_keys:
-        name = rk[4:]
-        if prefixes and not any(name.startswith(p) for p in prefixes):
-            continue
-        vk = f"var_{name}"
-        ref_val = data.get(rk)
-        var_val = data.get(vk)
-        if ref_val is not None and var_val is not None:
-            delta = round(var_val - ref_val, 4) if isinstance(ref_val, (int, float)) and isinstance(var_val, (int, float)) else None
-            annotations[name] = {"ref": ref_val, "alt": var_val, "delta": delta}
-
-    return annotations
+def _ensembl_variant_url(species: str, variant_id: str | None) -> str | None:
+    if not variant_id:
+        return None
+    return f"https://plants.ensembl.org/{species}/Variation/Explore?v={variant_id}"
 
 
-def _extract_top_disruptions(data: dict, top_n: int, category: str | None = None) -> list[dict]:
-    """Extract and rank annotation disruptions by magnitude of change."""
-    filter_prefixes = ANNOTATION_CATEGORIES[category]["prefixes"] if category else None
-    ref_keys = sorted(k for k in data if k.startswith("ref_") and not k[0].isdigit())
-    disruptions = []
-    for rk in ref_keys:
-        name = rk[4:]
-        if filter_prefixes and not any(name.startswith(p) for p in filter_prefixes):
-            continue
-        vk = f"var_{name}"
-        mk = f"maxpos_{name}"
-        ref_val = data.get(rk)
-        var_val = data.get(vk)
-        if ref_val is None or var_val is None:
-            continue
-        if not isinstance(ref_val, (int, float)) or not isinstance(var_val, (int, float)):
-            continue
-        delta = var_val - ref_val
-        abs_delta = abs(delta)
-        if abs_delta < 0.001:
-            continue
-
-        cat = "other"
-        for cat_name, cat_info in ANNOTATION_CATEGORIES.items():
-            if any(name.startswith(p) for p in cat_info["prefixes"]):
-                cat = cat_name
-                break
-
-        disruptions.append({
-            "annotation": name,
-            "category": cat,
-            "ref": round(ref_val, 4),
-            "alt": round(var_val, 4),
-            "delta": round(delta, 4),
-            "abs_delta": round(abs_delta, 4),
-            "max_disruption_position": data.get(mk),
-        })
-
-    disruptions.sort(key=lambda x: x["abs_delta"], reverse=True)
-    return disruptions[:top_n]
-
-
-def _curate_variant_summary(data: dict) -> dict:
-    """Curate the massive variant response into a structured summary for LLM consumption."""
-    summary = {}
-
-    # --- Identity ---
-    variant_id = data.get("variant_id")
-    summary["variant_id"] = variant_id
-    summary["evee_url"] = _evee_url(variant_id)
-    summary["rs_id"] = data.get("rs_id")
-    summary["chrom"] = data.get("chrom")
-    summary["pos"] = data.get("pos")
-    summary["ref"] = data.get("ref")
-    summary["alt"] = data.get("alt")
-    summary["variation_id"] = data.get("variation_id")
-
-    # --- Gene ---
-    summary["gene"] = data.get("gene_name")
-    summary["gene_id"] = data.get("gene_id")
-    summary["gene_strand"] = data.get("gene_strand")
-    summary["loeuf"] = data.get("loeuf")
-    summary["loeuf_label"] = data.get("loeuf_label")
-
-    # --- Consequence & HGVS ---
-    summary["consequence"] = data.get("consequence_display") or data.get("consequence")
-    summary["hgvs_coding"] = data.get("hgvsc")
-    summary["hgvs_protein"] = data.get("hgvsp")
-    summary["hgvs_coding_short"] = data.get("hgvsc_short")
-    summary["hgvs_protein_short"] = data.get("hgvsp_short")
-    summary["vep_transcript_id"] = data.get("vep_transcript_id")
-    summary["vep_protein_id"] = data.get("vep_protein_id")
-    summary["exon"] = data.get("exon")
-    summary["vep_impact"] = data.get("vep_impact")
-
-    # --- Clinical ---
-    summary["clinical_label"] = data.get("label_display") or data.get("label")
-    summary["pathogenicity_score"] = data.get("pathogenicity") or data.get("score")
-    summary["disease"] = data.get("disease")
-    summary["clinical_features"] = data.get("clinical_features")
-    summary["significance"] = data.get("significance")
-    summary["review_status"] = data.get("review_status")
-    summary["stars"] = data.get("stars")
-    summary["n_submissions"] = data.get("n_submissions")
-    summary["last_evaluated"] = data.get("last_evaluated")
-    summary["origin"] = data.get("origin")
-    summary["acmg"] = data.get("acmg")
-
-    # --- Model-derived scores (EVEE heads / probes aligned to external predictors) ---
-    scores = {}
-    score_keys = {
-        "evee_pathogenic": "eff_pathogenic",
-        "evee_splice_disrupting": "eff_splice_disrupting",
-        "alphamissense": "eff_alphamissense_c",
-        "cadd": "eff_cadd_c",
-        "revel": "eff_revel_c",
-        "sift": "eff_sift_c",
-        "polyphen": "eff_polyphen_c",
-        "spliceai_max": "eff_spliceai_max_c",
-        "clinpred": "eff_clinpred_c",
-        "bayesdel": "eff_bayesdel_c",
-        "vest4": "eff_vest4_c",
-        "blosum62": "eff_blosum62_c",
-        "grantham": "eff_grantham_c",
-        "charge_altering": "eff_charge_altering",
-        "hydrophobicity": "eff_hydrophobicity_c",
-        "mpc": "eff_mpc_c",
-        "mcap": "eff_mcap_c",
-        "metalr": "eff_metalr_c",
-        "mvp": "eff_mvp_c",
-        "primateai": "eff_primateai_c",
-        "deogen2": "eff_deogen2_c",
-        "mutpred": "eff_mutpred_c",
-        "cadd_wg": "eff_cadd_wg_c",
-    }
-    for name, key in score_keys.items():
-        val = data.get(key)
-        if val is not None:
-            scores[name] = val
-    summary["model_derived_scores"] = scores
-
-    # --- Reference predictor scores (raw values from source databases, when present) ---
-    gt_scores = {}
-    gt_keys = {
-        "alphamissense": "gt_alphamissense_c",
-        "cadd": "gt_cadd_c",
-        "revel": "gt_revel_c",
-        "sift": "gt_sift_c",
-        "spliceai_max": "gt_spliceai_max_c",
-    }
-    for name, key in gt_keys.items():
-        val = data.get(key)
-        if val is not None:
-            gt_scores[name] = val
-    if gt_scores:
-        summary["reference_predictor_scores"] = gt_scores
-
-    # --- Protein domains ---
-    summary["domains"] = data.get("domains")
-
-    # --- AI interpretation (from stored processed_result) ---
-    pr = data.get("processed_result")
-    if pr and isinstance(pr, dict) and pr.get("status") == "ok":
-        summary["interpretation"] = {
-            "summary": pr.get("summary"),
-            "mechanism": pr.get("mechanism"),
-            "key_evidence": pr.get("key_evidence"),
-            "confidence": pr.get("confidence"),
-        }
-    else:
-        summary["interpretation"] = None
-
-    # --- Similar variants ---
-    neighbors = data.get("neighbors", [])
-    if neighbors:
-        summary["similar_variants"] = [
-            {
-                "variant_id": n.get("id"),
-                "gene": n.get("gene"),
-                "consequence": n.get("consequence_display"),
-                "label": n.get("label_display") or n.get("label"),
-                "score": n.get("score"),
-                "similarity": n.get("similarity"),
-            }
-            for n in neighbors
-        ]
-
-    return summary
+def _normalize_species(species: str | None) -> str:
+    s = (species or DEFAULT_SPECIES).strip().lower().replace(" ", "_")
+    return s
 
 
 # ---------------------------------------------------------------------------
@@ -355,325 +178,571 @@ def _curate_variant_summary(data: dict) -> dict:
 
 
 @mcp.tool()
-def search_variants(query: str) -> list[dict] | dict:
-    """Autocomplete-style variant lookup (up to 6 matches) in the EVEE database.
+def list_plant_species(query: str | None = None) -> dict:
+    """List plant species available in Ensembl Plants.
 
-    The query must be ONE of these exact types — do NOT combine them or add
-    extra words like "pathogenic":
-      - A gene name: "BRCA1", "TP53", "FBN1"
-      - An rsID: "rs1597537935"
-      - A ClinVar variation ID (numeric): "655979"
+    Returns each species' Ensembl name (the value you pass as `species` to
+    other tools), display name, common name, assembly, and taxon id.
 
-    Returns at most 6 autocomplete-style matches. Pagination/limit params are
-    ignored by the backend.
-
-    WARNING: a gene-name query returns an adjacent-position autocomplete slice
-    of variants in that gene — NOT the top-pathogenicity variants of the gene.
-    Do not infer the gene's pathogenic landscape from these 6 rows. To look up
-    a specific variant, query by rsID or ClinVar variation ID.
-
-    Use this as the starting point to find variant IDs for the other tools.
+    Args:
+        query: Optional case-insensitive substring filter, matched against
+               name / display_name / common_name / aliases. Example: 'rice'
+               returns Oryza sativa indica/japonica and wild rice species.
+               Omit to list all ~80 plant species (the response is large).
     """
-    q = query.strip().rstrip(";,.:|/\\")
-    if not q:
-        return []
-    if any(ch.isspace() for ch in q):
-        return {"error": f"search_variants expects a single bare identifier. Got {query!r} with internal whitespace — pass one of: a gene symbol (e.g. 'BRCA1'), an rsID (e.g. 'rs1597537935'), or a numeric ClinVar variation ID (e.g. '655979'). Do not add qualifiers."}
-    if q.lower() == "rs" or (q.lower().startswith("rs") and len(q) <= 4 and not q[2:].isdigit()):
-        return {"error": f"search_variants got {query!r}, which looks like a truncated rsID. Supply a full rsID (e.g. 'rs1597537935')."}
+    with _get_client() as client:
+        resp = client.get("/info/species", params={"division": "EnsemblPlants"})
+        resp.raise_for_status()
+        all_species = resp.json().get("species", [])
+
+    if query:
+        q = query.strip().lower()
+
+        def match(sp: dict) -> bool:
+            fields = [
+                sp.get("name") or "",
+                sp.get("display_name") or "",
+                sp.get("common_name") or "",
+            ] + list(sp.get("aliases") or [])
+            return any(q in (f or "").lower() for f in fields)
+
+        all_species = [sp for sp in all_species if match(sp)]
+
+    return {
+        "count": len(all_species),
+        "species": [
+            {
+                "name": sp.get("name"),
+                "display_name": sp.get("display_name"),
+                "common_name": sp.get("common_name"),
+                "assembly": sp.get("assembly"),
+                "taxon_id": sp.get("taxon_id"),
+                "release": sp.get("release"),
+                "accession": sp.get("accession"),
+            }
+            for sp in all_species
+        ],
+    }
+
+
+@mcp.tool()
+def lookup_gene(gene: str, species: str | None = None, expand: bool = False) -> dict:
+    """Look up a plant gene by symbol or Ensembl stable ID.
+
+    Tries stable-ID lookup first (e.g. 'AT2G18790', 'Os01g0100100'), then
+    falls back to symbol lookup in the given species (e.g. 'PHYB', 'OsCKX2').
+
+    Args:
+        gene: Gene symbol or Ensembl Plants stable ID.
+        species: Ensembl species name (default 'arabidopsis_thaliana').
+        expand: If True, include transcripts / exons / translations in the
+                response. Significantly larger payload.
+    """
+    species = _normalize_species(species)
+    g = (gene or "").strip()
+    if not g:
+        return {"error": "gene argument is required"}
+
+    fallback = _community_fallback(species, "lookup_gene")
+    if fallback:
+        return fallback
+
+    params = {"expand": "1" if expand else "0"}
 
     with _get_client() as client:
-        resp = client.get("/variants/search", params={"q": q})
+        # Try stable-ID lookup first (works across species without specifying).
+        # Ensembl returns 400 (not 404) when the value isn't a valid stable ID
+        # at all (e.g. a gene symbol like "PHYB") — treat 400 and 404 alike.
+        resp = client.get(f"/lookup/id/{g}", params=params)
+        if resp.status_code in (400, 404):
+            # Fall back to symbol lookup, which requires species.
+            resp = client.get(f"/lookup/symbol/{species}/{g}", params=params)
+            if resp.status_code in (400, 404):
+                return {
+                    "error": "Gene not found",
+                    "gene": g,
+                    "species": species,
+                    "detail": "Neither stable-ID nor symbol lookup matched. Check spelling and species; symbol lookup is case-sensitive in some species.",
+                }
+        resp.raise_for_status()
+        data = resp.json()
+
+    gene_id = data.get("id")
+    sp = data.get("species") or species
+    return {
+        "gene_id": gene_id,
+        "symbol": data.get("display_name"),
+        "species": sp,
+        "biotype": data.get("biotype"),
+        "description": data.get("description"),
+        "seq_region": data.get("seq_region_name"),
+        "start": data.get("start"),
+        "end": data.get("end"),
+        "strand": data.get("strand"),
+        "assembly": data.get("assembly_name"),
+        "canonical_transcript": data.get("canonical_transcript"),
+        "source": data.get("source"),
+        "logic_name": data.get("logic_name"),
+        "ensembl_url": _ensembl_gene_url(sp, gene_id),
+        # Only present when expand=True.
+        "transcripts": data.get("Transcript"),
+    }
+
+
+@mcp.tool()
+def search_variants_in_region(
+    region: str,
+    species: str | None = None,
+    limit: int = 25,
+) -> dict:
+    """List known variants overlapping a genomic region.
+
+    Backed by Ensembl Plants variation catalogs — e.g. the 1001 Genomes
+    Project for Arabidopsis, the 3K Rice Genomes Project for rice. Not all
+    plant species in Ensembl have variation data; species without a
+    variation database return an empty list (not an error).
+
+    Args:
+        region: Genomic region as 'chrom:start-end' (1-based, inclusive).
+                Examples: '2:8140000-8140100' (Arabidopsis), '1:1000-2000'
+                (rice). Use the assembly's native chromosome names — for
+                Arabidopsis TAIR10 use '1'..'5', 'Mt', 'Pt' (no 'chr').
+        species: Ensembl species name (default 'arabidopsis_thaliana').
+        limit: Maximum variants to return (default 25, max 200). The
+               Ensembl API itself caps overlap responses; this is a
+               client-side truncation.
+    """
+    species = _normalize_species(species)
+    r = (region or "").strip()
+    if not r:
+        return {"error": "region argument is required (format 'chrom:start-end')"}
+    limit = min(max(1, limit), 200)
+
+    fallback = _community_fallback(species, "search_variants_in_region")
+    if fallback:
+        return fallback
+
+    with _get_client() as client:
+        resp = client.get(
+            f"/overlap/region/{species}/{r}",
+            params={"feature": "variation"},
+        )
+        if resp.status_code == 400:
+            return {
+                "error": "Bad region specifier",
+                "detail": resp.text,
+                "hint": "Ensembl regions are 'chrom:start-end' (1-based). For Arabidopsis use chromosome '1'..'5' without 'chr'.",
+            }
+        if resp.status_code == 404:
+            return {
+                "error": "Region not found",
+                "region": r,
+                "species": species,
+            }
+        resp.raise_for_status()
+        variants = resp.json()
+
+    truncated = len(variants) > limit
+    variants = variants[:limit]
+
+    return {
+        "region": r,
+        "species": species,
+        "count": len(variants),
+        "truncated": truncated,
+        "variants": [
+            {
+                "variant_id": v.get("id"),
+                "ensembl_url": _ensembl_variant_url(species, v.get("id")),
+                "seq_region": v.get("seq_region_name"),
+                "start": v.get("start"),
+                "end": v.get("end"),
+                "strand": v.get("strand"),
+                "alleles": v.get("alleles"),
+                "consequence": v.get("consequence_type"),
+                "source": v.get("source"),
+                "clinical_significance": v.get("clinical_significance") or None,
+            }
+            for v in variants
+        ],
+    }
+
+
+@mcp.tool()
+def get_variant(variant_id: str, species: str | None = None) -> dict:
+    """Get full information for a known plant variant by stable ID.
+
+    Args:
+        variant_id: Variant stable ID, e.g. 'ENSVATH00237387' (Arabidopsis)
+                    or '1001genomes_snp:1:12345' style IDs depending on the
+                    catalog.
+        species: Ensembl species name (default 'arabidopsis_thaliana').
+                 Must match the species whose variation database holds the
+                 ID; Ensembl variant IDs are not unique across species.
+    """
+    species = _normalize_species(species)
+    vid = (variant_id or "").strip()
+    if not vid:
+        return {"error": "variant_id is required"}
+
+    fallback = _community_fallback(species, "get_variant")
+    if fallback:
+        return fallback
+
+    with _get_client() as client:
+        resp = client.get(f"/variation/{species}/{vid}")
+        if resp.status_code == 404:
+            return {
+                "error": "Variant not found",
+                "variant_id": vid,
+                "species": species,
+            }
+        resp.raise_for_status()
+        data = resp.json()
+
+    return {
+        "variant_id": data.get("name") or vid,
+        "ensembl_url": _ensembl_variant_url(species, data.get("name") or vid),
+        "species": species,
+        "variant_class": data.get("var_class"),
+        "most_severe_consequence": data.get("most_severe_consequence"),
+        "ambiguity": data.get("ambiguity"),
+        "minor_allele": data.get("minor_allele"),
+        "minor_allele_frequency": data.get("MAF"),
+        "ancestral_allele": (data.get("mappings") or [{}])[0].get("ancestral_allele"),
+        "source": data.get("source"),
+        "synonyms": data.get("synonyms") or [],
+        "evidence": data.get("evidence") or [],
+        "mappings": [
+            {
+                "location": m.get("location"),
+                "seq_region": m.get("seq_region_name"),
+                "start": m.get("start"),
+                "end": m.get("end"),
+                "strand": m.get("strand"),
+                "allele_string": m.get("allele_string"),
+                "assembly": m.get("assembly_name"),
+            }
+            for m in (data.get("mappings") or [])
+        ],
+    }
+
+
+@mcp.tool()
+def predict_variant_effect(
+    region: str | None = None,
+    allele: str | None = None,
+    variant_id: str | None = None,
+    species: str | None = None,
+) -> dict:
+    """Predict the effect of a variant using Ensembl VEP.
+
+    Two input modes (provide exactly one):
+      - region + allele: a novel/unknown variant, e.g. region='2:8140000-8140000',
+        allele='T'. Strand defaults to +1; append ':-1' to region for minus
+        strand (e.g. '2:8140000-8140000:-1'). For insertions, start = end + 1.
+      - variant_id: a known stable ID in the species' variation database.
+
+    Returns per-transcript consequences from Ensembl's VEP (the classical
+    rule-based predictor — not a deep-learning model). Each transcript hit
+    includes consequence terms (e.g. 'missense_variant'), impact level
+    (HIGH/MODERATE/LOW/MODIFIER), and HGVS where applicable.
+
+    Args:
+        region: Ensembl region string ('chrom:start-end' or 'chrom:start-end:strand').
+        allele: Alternate allele (single nucleotide, multi-nucleotide,
+                or '-' for deletions; insertions are encoded by setting
+                start = end + 1).
+        variant_id: Known variant stable ID, e.g. 'ENSVATH00237387'.
+        species: Ensembl species name (default 'arabidopsis_thaliana').
+    """
+    species = _normalize_species(species)
+
+    if (region is None or allele is None) and not variant_id:
+        return {
+            "error": "Provide either (region AND allele) for a novel variant, or variant_id for a known variant.",
+        }
+
+    if variant_id and (region or allele):
+        return {
+            "error": "Provide variant_id OR (region+allele), not both.",
+        }
+
+    fallback = _community_fallback(species, "predict_variant_effect")
+    if fallback:
+        return fallback
+
+    with _get_client() as client:
+        if variant_id:
+            path = f"/vep/{species}/id/{variant_id.strip()}"
+        else:
+            r = region.strip()
+            a = allele.strip()
+            path = f"/vep/{species}/region/{r}/{a}"
+
+        resp = client.get(path)
+        if resp.status_code == 400:
+            return {
+                "error": "VEP rejected the request",
+                "detail": resp.text,
+                "hint": "Check region format (1-based, 'chrom:start-end'), allele case (uppercase nucleotides), and species name.",
+            }
+        if resp.status_code == 404:
+            return {
+                "error": "Variant not found (VEP)",
+                "variant_id": variant_id,
+                "region": region,
+                "species": species,
+            }
         resp.raise_for_status()
         results = resp.json()
 
-    return [
-        {
-            "variant_id": r["v"],
-            "gene": r.get("g"),
-            "clinical_label": r.get("l"),
-            "pathogenicity_score": r.get("s"),
-            "consequence": r.get("c"),
-        }
-        for r in results
-    ]
-
-
-@mcp.tool()
-def get_variant(variant_id: str) -> dict:
-    """Get comprehensive information about a specific genetic variant.
-
-    Returns clinical significance, model-derived scores from EVEE's heads
-    (aligned to AlphaMissense, CADD, REVEL, SIFT, etc.), reference predictor
-    scores from external databases when present, gene constraint (LOEUF), HGVS
-    notation, disease associations, protein domains, and the AI-generated
-    mechanistic interpretation.
-
-    If the stored interpretation isn't ready, this tool hits EVEE's on-demand
-    /analysis endpoint once: if generation has already completed, the fresh
-    interpretation is returned inline; otherwise the response carries an
-    `interpretation = {status: queued/processing, detail: ...}` entry and you
-    should call `wait_for_variant_analysis` to poll until it finishes.
-
-    Args:
-        variant_id: Variant identifier in chr:pos:ref:alt format
-                    (e.g. "chr17:43092918:G:A" for BRCA1 ClinVar ID 41812).
-                    NOTE: EVEE uses 0-based positions; ClinVar/VCF/HGVS are
-                    1-based. Subtract 1 from ClinVar pos for SNVs; for indels
-                    the offset varies — prefer search_variants.
-    """
-    with _get_client() as client:
-        resp = client.get(f"/variants/{variant_id}")
-        if resp.status_code == 404:
-            return {"error": "Variant not found", "variant_id": variant_id}
-        resp.raise_for_status()
-        data = resp.json()
-
-        summary = _curate_variant_summary(data)
-
-        if summary["interpretation"] is None:
-            analysis = _fetch_analysis(client, variant_id)
-            interp = _interpretation_from_analysis(analysis)
-            if interp:
-                summary["interpretation"] = interp
-            else:
-                summary["interpretation"] = {
-                    "status": analysis.get("status", "unavailable"),
-                    "detail": "Interpretation is being generated on-demand. Call wait_for_variant_analysis to poll for completion.",
-                }
-
-    return summary
-
-
-@mcp.tool()
-def wait_for_variant_analysis(
-    variant_id: str,
-    timeout_seconds: float = 20.0,
-    poll_interval_seconds: float = 2.0,
-) -> dict:
-    """Poll EVEE's on-demand interpretation until it completes or times out.
-
-    Use this when `get_variant` reports `interpretation.status` as queued or
-    processing. Returns the same curated variant summary as `get_variant`, plus
-    a `wait_status` entry with attempts / elapsed_seconds. If the deadline
-    hits before completion, call this tool again to keep polling.
-
-    Args:
-        variant_id: Variant identifier in chr:pos:ref:alt format.
-        timeout_seconds: Maximum wall-clock time to wait (clamped to [1, 60]).
-        poll_interval_seconds: Delay between polls (clamped to [0.5, 10]).
-    """
-    timeout_seconds = min(max(timeout_seconds, 1.0), 60.0)
-    poll_interval_seconds = min(max(poll_interval_seconds, 0.5), 10.0)
-
-    started = time.monotonic()
-    deadline = started + timeout_seconds
-    attempts = 0
-    analysis: dict = {"status": "unavailable"}
-
-    def _remaining() -> float:
-        return max(0.0, deadline - time.monotonic())
-
-    with _get_client() as client:
-        resp = client.get(f"/variants/{variant_id}", timeout=max(1.0, _remaining()))
-        if resp.status_code == 404:
-            return {"error": "Variant not found", "variant_id": variant_id}
-        resp.raise_for_status()
-        data = resp.json()
-
-        while True:
-            remaining = _remaining()
-            if remaining <= 0:
-                break
-            try:
-                analysis = _fetch_analysis(client, variant_id, timeout=max(1.0, remaining))
-            except httpx.TimeoutException:
-                analysis = {"status": "queued"}
-                break
-            attempts += 1
-            if analysis.get("status") in ("complete", "not_found"):
-                break
-            if _remaining() <= 0:
-                break
-            time.sleep(min(poll_interval_seconds, _remaining()))
-
-    if analysis.get("status") == "not_found":
-        return {"error": "Variant not found", "variant_id": variant_id}
-
-    summary = _curate_variant_summary(data)
-    interp = _interpretation_from_analysis(analysis)
-    if interp:
-        summary["interpretation"] = interp
-        wait_status = "complete"
-    else:
-        summary["interpretation"] = {
-            "status": analysis.get("status", "unavailable"),
-            "detail": "Still generating after timeout. Call wait_for_variant_analysis again to continue polling.",
-        }
-        wait_status = "timeout"
-
-    summary["wait_status"] = {
-        "status": wait_status,
-        "attempts": attempts,
-        "elapsed_seconds": round(time.monotonic() - started, 2),
-    }
-    return summary
-
-
-@mcp.tool()
-def get_variant_disruptions(variant_id: str, top_n: int = 15, category: str | None = None) -> dict:
-    """Get the top biological annotation disruptions for a variant.
-
-    Shows which molecular features are most affected by the variant, ranked by
-    magnitude of change. Each disruption shows what the Evo 2 model predicts
-    for the reference vs. alternate allele across 325 biological annotations
-    spanning protein structure, chromatin state, regulatory elements, splice
-    sites, and more.
-
-    This is the key tool for understanding WHY a variant is predicted pathogenic
-    or benign — e.g., a splice-site variant might show large disruptions in
-    splice donor/acceptor annotations, while a missense variant might show
-    disruptions in protein domain and secondary structure annotations.
-
-    Categories: amino_acid, atacseq, ccre, chipseq, chromhmm, elm, fstack,
-    protein_feature, interpro, genomic_feature, ptm, region, secondary_structure.
-
-    Args:
-        variant_id: Variant identifier in chr:pos:ref:alt format.
-        top_n: Number of top disruptions to return (default 15, max 100).
-        category: Optional category filter — restrict ranking to one category
-                  (e.g. to see only splice-related disruptions:
-                  category='genomic_feature').
-    """
-    if category is not None and category not in ANNOTATION_CATEGORIES:
-        return {"error": f"Unknown category '{category}'. Valid categories: {', '.join(sorted(ANNOTATION_CATEGORIES))}"}
-
-    top_n = min(max(1, top_n), 100)
-
-    with _get_client() as client:
-        resp = client.get(f"/variants/{variant_id}")
-        if resp.status_code == 404:
-            return {"error": "Variant not found", "variant_id": variant_id}
-        resp.raise_for_status()
-        data = resp.json()
-
-    disruptions = _extract_top_disruptions(data, top_n, category)
-
-    vid = data.get("variant_id")
-    result = {
-        "variant_id": vid,
-        "evee_url": _evee_url(vid),
-        "gene": data.get("gene_name"),
-        "consequence": data.get("consequence_display"),
-        "pathogenicity_score": data.get("pathogenicity") or data.get("score"),
-        "disruption_count": len(disruptions),
-        "disruptions": disruptions,
-    }
-    if category:
-        result["category"] = category
-    return result
-
-
-@mcp.tool()
-def get_variant_annotations(
-    variant_id: str,
-    category: str | None = None,
-) -> dict:
-    """Get detailed annotation probe values for a variant.
-
-    Returns the Evo 2 model's predicted annotation values for both the
-    reference and alternate allele across 325 biological annotations. Each
-    annotation shows ref (reference allele prediction), alt (alternate allele
-    prediction), and delta (alt - ref).
-
-    Use this for deep analysis when you need the full picture — e.g., all
-    chromatin marks across tissues, all amino acid probabilities, or every
-    protein feature prediction. For a quick ranked view of what's most
-    disrupted, use get_variant_disruptions instead.
-
-    Args:
-        variant_id: Variant identifier in chr:pos:ref:alt format.
-        category: Optional filter. One of: amino_acid, atacseq, ccre, chipseq,
-                  chromhmm, elm, fstack, protein_feature, interpro,
-                  genomic_feature, ptm, region, secondary_structure.
-                  Omit to get ALL annotations.
-    """
-    with _get_client() as client:
-        resp = client.get(f"/variants/{variant_id}")
-        if resp.status_code == 404:
-            return {"error": "Variant not found", "variant_id": variant_id}
-        resp.raise_for_status()
-        data = resp.json()
-
-    annotations = _extract_annotations(data, category)
-    if "error" in annotations:
-        return annotations
-
-    vid = data.get("variant_id")
-    result = {
-        "variant_id": vid,
-        "evee_url": _evee_url(vid),
-        "gene": data.get("gene_name"),
-        "consequence": data.get("consequence_display"),
-        "annotation_count": len(annotations),
-    }
-
-    if category:
-        result["category"] = category
-        result["category_description"] = ANNOTATION_CATEGORIES[category]["description"]
-
-    result["annotations"] = annotations
-
-    if not category:
-        result["available_categories"] = {
-            name: {"description": info["description"], "count": sum(1 for a in annotations if any(a.startswith(p) for p in info["prefixes"]))}
-            for name, info in ANNOTATION_CATEGORIES.items()
+    if not results:
+        return {
+            "species": species,
+            "region": region,
+            "variant_id": variant_id,
+            "consequences": [],
+            "detail": "VEP returned an empty result. The variant may not overlap any annotated transcripts.",
         }
 
-    return result
+    out_results = []
+    for vep in results:
+        transcript_hits = []
+        for tc in vep.get("transcript_consequences") or []:
+            transcript_hits.append({
+                "gene_id": tc.get("gene_id"),
+                "gene_symbol": tc.get("gene_symbol"),
+                "transcript_id": tc.get("transcript_id"),
+                "biotype": tc.get("biotype"),
+                "consequence_terms": tc.get("consequence_terms"),
+                "impact": tc.get("impact"),
+                "amino_acids": tc.get("amino_acids"),
+                "codons": tc.get("codons"),
+                "protein_start": tc.get("protein_start"),
+                "protein_end": tc.get("protein_end"),
+                "cdna_start": tc.get("cdna_start"),
+                "cdna_end": tc.get("cdna_end"),
+                "cds_start": tc.get("cds_start"),
+                "cds_end": tc.get("cds_end"),
+                "distance": tc.get("distance"),
+                "strand": tc.get("strand"),
+                "hgvsc": tc.get("hgvsc"),
+                "hgvsp": tc.get("hgvsp"),
+                "sift_prediction": tc.get("sift_prediction"),
+                "sift_score": tc.get("sift_score"),
+                "polyphen_prediction": tc.get("polyphen_prediction"),
+                "polyphen_score": tc.get("polyphen_score"),
+            })
+
+        out_results.append({
+            "input": vep.get("input"),
+            "id": vep.get("id"),
+            "allele_string": vep.get("allele_string"),
+            "seq_region": vep.get("seq_region_name"),
+            "start": vep.get("start"),
+            "end": vep.get("end"),
+            "strand": vep.get("strand"),
+            "assembly": vep.get("assembly_name"),
+            "most_severe_consequence": vep.get("most_severe_consequence"),
+            "transcript_consequence_count": len(transcript_hits),
+            "transcript_consequences": transcript_hits,
+            "regulatory_feature_consequences": vep.get("regulatory_feature_consequences") or [],
+            "intergenic_consequences": vep.get("intergenic_consequences") or [],
+        })
+
+    return {
+        "species": species,
+        "result_count": len(out_results),
+        "results": out_results,
+    }
 
 
 @mcp.tool()
-def compare_variants(variant_ids: list[str]) -> dict:
-    """Compare multiple variants side-by-side.
+def compare_variants(variant_ids: list[str], species: str | None = None) -> dict:
+    """Compare multiple known plant variants side-by-side.
 
-    Fetches clinical label, pathogenicity score, gene, HGVS protein, consequence,
-    and the top-1 disruption for each. Use when the user asks to contrast,
-    rank, or compare 2+ variants, instead of looping get_variant.
+    Issues one /variation lookup per ID and condenses the result. Use this
+    instead of looping `get_variant`. Does NOT deduplicate input IDs — strip
+    duplicates client-side.
 
     Args:
-        variant_ids: List of variant IDs in chr:pos:ref:alt format (max 10).
+        variant_ids: List of Ensembl variant stable IDs (max 10).
+        species: Ensembl species name (default 'arabidopsis_thaliana'). All
+                 IDs must be from the same species' variation database.
     """
+    species = _normalize_species(species)
+    if not variant_ids:
+        return {"error": "variant_ids must be a non-empty list"}
     if len(variant_ids) > 10:
         return {"error": "compare_variants accepts at most 10 variant IDs per call."}
+
+    fallback = _community_fallback(species, "compare_variants")
+    if fallback:
+        return fallback
 
     rows = []
     with _get_client() as client:
         for vid in variant_ids:
-            resp = client.get(f"/variants/{vid}")
+            vid = (vid or "").strip()
+            if not vid:
+                rows.append({"variant_id": vid, "error": "empty ID"})
+                continue
+            resp = client.get(f"/variation/{species}/{vid}")
             if resp.status_code == 404:
                 rows.append({"variant_id": vid, "error": "Variant not found"})
                 continue
             resp.raise_for_status()
             data = resp.json()
-            top = _extract_top_disruptions(data, 1)
-            top_disruption = None
-            if top:
-                t = top[0]
-                top_disruption = {"annotation": t["annotation"], "category": t["category"], "delta": t["delta"]}
-            rid = data.get("variant_id")
+            mapping = (data.get("mappings") or [{}])[0]
             rows.append({
-                "variant_id": rid,
-                "evee_url": _evee_url(rid),
-                "gene": data.get("gene_name"),
-                "clinical_label": data.get("label_display") or data.get("label"),
-                "pathogenicity_score": data.get("pathogenicity") or data.get("score"),
-                "hgvs_protein_short": data.get("hgvsp_short"),
-                "consequence": data.get("consequence_display") or data.get("consequence"),
-                "top_disruption": top_disruption,
+                "variant_id": data.get("name") or vid,
+                "ensembl_url": _ensembl_variant_url(species, data.get("name") or vid),
+                "variant_class": data.get("var_class"),
+                "most_severe_consequence": data.get("most_severe_consequence"),
+                "location": mapping.get("location"),
+                "allele_string": mapping.get("allele_string"),
+                "minor_allele_frequency": data.get("MAF"),
+                "source": data.get("source"),
             })
 
-    return {"variants": rows}
+    return {"species": species, "variants": rows}
+
+
+@mcp.tool()
+def get_orthologs(
+    gene: str,
+    species: str | None = None,
+    target_species: str | None = None,
+    target_taxon: int | None = None,
+) -> dict:
+    """Find orthologs of a plant gene in other plant species.
+
+    The Ensembl Compara plant-species tree powers cross-species translation
+    (e.g. 'this Arabidopsis gene I just characterized — what's the rice
+    counterpart?'). Returns ortholog stable IDs, target species, ortholog
+    type (one2one / one2many / many2many), and taxonomy level of the
+    homology call.
+
+    Args:
+        gene: Gene symbol or Ensembl stable ID of the source gene.
+        species: Ensembl species of the source gene (default 'arabidopsis_thaliana').
+        target_species: Optional — restrict to one target species, e.g.
+                        'oryza_sativa'. Mutually exclusive with target_taxon.
+        target_taxon: Optional — restrict by NCBI taxon ID, e.g. 4577 for
+                      Zea mays, 4565 for wheat (Triticum aestivum), 33090
+                      for all green plants (Viridiplantae).
+    """
+    species = _normalize_species(species)
+    g = (gene or "").strip()
+    if not g:
+        return {"error": "gene argument is required"}
+    if target_species and target_taxon:
+        return {"error": "Provide target_species OR target_taxon, not both."}
+
+    fallback = _community_fallback(species, "get_orthologs")
+    if fallback:
+        return fallback
+
+    params = {"type": "orthologues", "format": "condensed"}
+    if target_species:
+        params["target_species"] = _normalize_species(target_species)
+    if target_taxon is not None:
+        params["target_taxon"] = str(target_taxon)
+
+    with _get_client() as client:
+        # Stable-ID first, fall back to symbol. Ensembl returns 400 for
+        # non-ID inputs (gene symbols); treat 400 and 404 alike.
+        resp = client.get(f"/homology/id/{g}", params=params)
+        used_route = "id"
+        if resp.status_code in (400, 404):
+            resp = client.get(f"/homology/symbol/{species}/{g}", params=params)
+            used_route = "symbol"
+            if resp.status_code in (400, 404):
+                return {
+                    "error": "Gene not found for homology lookup",
+                    "gene": g,
+                    "species": species,
+                }
+        resp.raise_for_status()
+        data = resp.json()
+
+    entries = data.get("data") or []
+    orthologs = []
+    source_id = None
+    for entry in entries:
+        source_id = entry.get("id") or source_id
+        for h in entry.get("homologies") or []:
+            orthologs.append({
+                "ortholog_id": h.get("id"),
+                "protein_id": h.get("protein_id"),
+                "species": h.get("species"),
+                "type": h.get("type"),
+                "taxonomy_level": h.get("taxonomy_level"),
+                "method_link_type": h.get("method_link_type"),
+            })
+
+    return {
+        "source_gene": g,
+        "source_gene_id": source_id,
+        "source_species": species,
+        "lookup_route": used_route,
+        "target_species": target_species,
+        "target_taxon": target_taxon,
+        "ortholog_count": len(orthologs),
+        "orthologs": orthologs,
+    }
+
+
+@mcp.tool()
+def get_sequence(
+    stable_id: str,
+    seq_type: str = "genomic",
+    species: str | None = None,
+) -> dict:
+    """Fetch a sequence by Ensembl Plants stable ID.
+
+    Args:
+        stable_id: Gene, transcript, exon, or protein stable ID. Note that
+                   gene IDs can yield multiple sequences for non-genomic
+                   types — for protein/cdna/cds prefer a transcript ID like
+                   'AT2G18790.1' rather than the gene ID 'AT2G18790'.
+        seq_type: One of 'genomic', 'cdna', 'cds', 'protein'.
+        species: Ensembl species name (default 'arabidopsis_thaliana').
+                 Only used as a hint; stable IDs are globally unique.
+    """
+    species = _normalize_species(species)
+    sid = (stable_id or "").strip()
+    if not sid:
+        return {"error": "stable_id is required"}
+    if seq_type not in {"genomic", "cdna", "cds", "protein"}:
+        return {
+            "error": f"Unknown seq_type {seq_type!r}",
+            "valid": ["genomic", "cdna", "cds", "protein"],
+        }
+
+    with _get_client() as client:
+        resp = client.get(f"/sequence/id/{sid}", params={"type": seq_type})
+        if resp.status_code == 404:
+            return {"error": "Stable ID not found", "stable_id": sid}
+        if resp.status_code == 400:
+            return {
+                "error": "Bad sequence request",
+                "detail": resp.text,
+                "hint": "For 'cdna'/'cds'/'protein', pass a transcript ID (e.g. 'AT2G18790.1'), not a gene ID. For 'genomic', a gene ID is fine.",
+            }
+        resp.raise_for_status()
+        data = resp.json()
+
+    return {
+        "stable_id": data.get("id") or sid,
+        "species": species,
+        "seq_type": seq_type,
+        "molecule": data.get("molecule"),
+        "length": len(data.get("seq") or ""),
+        "sequence": data.get("seq"),
+        "description": data.get("desc"),
+    }
 
 
 def main():

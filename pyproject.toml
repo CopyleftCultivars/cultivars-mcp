@@ -1,7 +1,7 @@
 [project]
-name = "evee-mcp"
+name = "phytogen-mcp"
 version = "0.1.0"
-description = "MCP server for the EVEE (Evo Variant Effect Explorer) API — variant effect prediction from genomic foundation model embeddings"
+description = "MCP server for plant genomics research — gene lookup, variant effect prediction, orthology, and sequence retrieval via the Ensembl Plants REST API"
 requires-python = ">=3.10"
 dependencies = [
     "mcp[cli]>=1.0.0",

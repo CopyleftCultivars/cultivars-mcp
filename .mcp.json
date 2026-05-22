@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "evee": {
+    "phytogen": {
       "command": "uv",
       "args": ["run", "python3", "server.py"]
     }
