@@ -79,6 +79,8 @@ the molecular literature without buying into proprietary breeder platforms.
 | `compare_variants` | Side-by-side summary of 2–10 known variants in one call. |
 | `get_orthologs` | Translate findings between species via Ensembl Compara — *the* tool for grower-scientists working with heritage crops where direct molecular literature is sparse. Find the rice / maize / cassava counterpart of a well-characterized Arabidopsis gene, etc. |
 | `get_sequence` | Fetch genomic / cDNA / CDS / protein sequence for a stable ID. |
+| `list_trait_categories` | Discover the curated trait atlas — 18 natural-farming-relevant trait categories from drought / salt / cold tolerance through mycorrhizal symbiosis, N-use efficiency, defense secondary metabolites, photoperiodic flowering, Green Revolution dwarfing, and aluminum tolerance on acidic tropical soils. |
+| `find_trait_genes` | Look up canonical genes for a trait — e.g. `drought_tolerance` → DREB1A, DREB2A, SnRK2.6/OST1, RD29A, HVA1, DRO1, each with the species in which it was characterized. The starting point for "what's known about *X*?" questions. Pair with `get_orthologs` to translate to your crop. |
 
 ## Use cases for grower-scientists
 
@@ -87,12 +89,9 @@ sequences. The genomics doesn't answer the farming question on its own —
 but it grounds the molecular conversation.
 
 ### "Why is this landrace drought-tolerant?"
-1. `lookup_gene("DREB1A", species="arabidopsis_thaliana")` — the canonical
-   drought-responsive transcription factor in Arabidopsis.
-2. `get_orthologs(...)` — find the ortholog in your species (rice OsDREB1A,
-   maize ZmDREB1A, etc.).
-3. `search_variants_in_region(...)` over the ortholog's locus to see what
-   allelic diversity is documented in the breeding pool.
+1. `find_trait_genes(trait="drought_tolerance", target_species="sorghum_bicolor")` — surfaces DREB1A, DREB2A, SnRK2.6, RD29A, HVA1, DRO1 and which species each was characterized in.
+2. `get_orthologs("DREB1A", species="arabidopsis_thaliana", target_species="sorghum_bicolor")` — find the sorghum ortholog.
+3. `search_variants_in_region(...)` over the ortholog's locus to see what allelic diversity is documented in the breeding pool (variation coverage varies by species — sorghum is currently sparse).
 
 ### "Does this rice gene have a maize equivalent?"
 1. `lookup_gene("OsNRT1.1B", species="oryza_sativa")` — nitrate transporter
@@ -160,6 +159,44 @@ Add to `claude_desktop_config.json`:
   }
 }
 ```
+
+## The trait atlas (`find_trait_genes`)
+
+The fork's biggest in-code alignment with Copyleft Cultivars's mission is a curated map from natural-farming-relevant traits to canonical gene families:
+
+| Category | Genes (representative) | Why it matters in natural farming |
+|---|---|---|
+| `drought_tolerance` | DREB1A, DREB2A, SnRK2.6/OST1, RD29A, HVA1, DRO1 | Marginal land + rain-fed smallholder farming |
+| `salt_tolerance` | SOS1/2/3, NHX1, HKT1, OsHKT1;5 (Pokkali Saltol) | Coastal / arid irrigated smallholder farming |
+| `cold_tolerance` | CBF1/2, ICE1, COR15A | High-latitude / high-altitude winter hardiness |
+| `heat_tolerance` | HsfA1a, HsfA2, HSP70, HSP101 | Tropical heat extremes |
+| `submergence_tolerance` | SUB1A, SK1, SK2 | Monsoon-region rice (Swarna-Sub1 lineage) |
+| `nitrogen_use_efficiency` | NRT1.1/2.1, NRT1.1B, AMT1.1, GS1 | KNF / non-synthetic-fertilizer N-cycling |
+| `phosphorus_uptake` | PHT1.1, PHO2, PHR1, PSTOL1 (Kasalath) | Weathered tropical soils + mycorrhizal partnership |
+| `iron_uptake` | IRT1, FRO2, FIT, IDS3 | Biofortification + calcareous-soil farming |
+| `mycorrhizal_symbiosis` | SYMRK/DMI2, CCaMK/DMI3, DMI1, PT4, RAM1, DELLA | KNF + JADAM nutrient-cycling backbone |
+| `rhizobial_nodulation` | NFR1/5, NIN, ERN1, NSP1 | Legume cover-cropping N-fixation engine |
+| `root_architecture` | PIN2, ARF7, LBD16, RHD6, DRO1 | Physical interface to managed soil biology |
+| `defense_jasmonate` | COI1, MYC2, LOX2, JAR1, JAZ1 | Plant-side counterpart to KNF pest management |
+| `terpene_biosynthesis` | TPS21, TPS10, STO1, OsKSL4 | Aroma / allelopathy / heritage flavor |
+| `glucosinolate_biosynthesis` | MYB28/29/51, CYP79B2 | Brassica biofumigation cover crops |
+| `flowering_photoperiod` | FT, CO, FLC, VRN1, Hd1 | Latitude-of-origin in heritage varieties |
+| `plant_height_dwarfing` | SD1, Rht-B1, D8 | Green Revolution alleles vs. tall heritage varieties |
+| `tiller_branching` | TB1 (teosinte-maize), MAX2, D14, MOC1 | Yield architecture levers |
+| `aluminum_tolerance` | ALMT1, MATE1/AltSB, STOP1 | Acidic tropical soils — landrace heritage |
+
+For each gene the atlas records the species in which it was characterized and a one-line function; pair with `get_orthologs` to translate to the crop you actually grow. The atlas is a **starting-point literature map**, not a closed list.
+
+## Testing & CI
+
+The repository ships a pytest suite (`tests/test_server.py`) using `httpx.MockTransport` — no live network required, runs in ~1 second. GitHub Actions runs it on Python 3.10 / 3.11 / 3.12 on every PR.
+
+```bash
+pip install -e ".[dev]"
+pytest tests/ -v
+```
+
+Tests cover: Cannabis-sativa fallback (zero HTTP), `/lookup/id` 400-vs-404 fallback semantics, region-search truncation, VEP input validation, ortholog symbol fallback, 429/503 Retry-After backoff, retry budget exhaustion, trait atlas invariants, species-name normalization.
 
 ## Data sources
 

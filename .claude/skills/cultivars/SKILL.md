@@ -1,7 +1,7 @@
 ---
 name: cultivars
 description: Plant-genomics lookup for grower-scientists, heritage breeders, and natural-farming researchers via the Ensembl Plants REST API. Use when the user mentions a specific plant gene (PHYB, DREB1A, OsCKX2, ZmRAP2.7), a plant gene ID (AT2G18790, Os01g0100100, Zm00001eb...), a plant species' variant, a genomic region in Arabidopsis / rice / maize / sorghum / common bean / cassava / tomato / sunflower / grape (and other Ensembl Plants species), or asks about cross-species orthology between plants ("what's the rice equivalent of this Arabidopsis gene?"). Trigger on questions about variant effects in plants, predicted impact of a plant SNP/indel, plant gene structure (transcripts, biotype, coordinates), plant gene sequences (genomic / cDNA / CDS / protein), or 1001 Genomes / 3K Rice Genomes variants. Trigger on questions about Cannabis sativa genetics too — the tool surfaces an honest gap notice with NCBI / Cannabis Genome DB pointers rather than failing silently. Do NOT trigger on general agronomic questions (fertilizer, irrigation, composting, IMO preparation, KNF inputs) — those belong to TinyLLamaFarmer / gemma4-natural-farming. Do NOT trigger on phenotypic breeding advice or on-farm trial design. Do NOT trigger on human or animal genetics.
-allowed-tools: mcp__cultivars__list_plant_species mcp__cultivars__lookup_gene mcp__cultivars__search_variants_in_region mcp__cultivars__get_variant mcp__cultivars__predict_variant_effect mcp__cultivars__compare_variants mcp__cultivars__get_orthologs mcp__cultivars__get_sequence
+allowed-tools: mcp__cultivars__list_plant_species mcp__cultivars__lookup_gene mcp__cultivars__search_variants_in_region mcp__cultivars__get_variant mcp__cultivars__predict_variant_effect mcp__cultivars__compare_variants mcp__cultivars__get_orthologs mcp__cultivars__get_sequence mcp__cultivars__list_trait_categories mcp__cultivars__find_trait_genes
 ---
 
 # Cultivars — Plant Genomics for the Commons
@@ -75,6 +75,40 @@ Copyleft Cultivars audience:
 - Many heritage / orphan crops not yet sequenced to reference quality
 
 ## How to use the tools
+
+### Step -1 (most common entry point for grower-scientist questions): trait atlas
+
+When a user asks "what's known about *X*?" — drought tolerance, mycorrhiza,
+N-use efficiency, photoperiodic flowering, aluminum tolerance on acidic
+soils — the **fastest grounding** is the curated trait atlas:
+
+```
+list_trait_categories()
+find_trait_genes(trait="drought_tolerance", target_species="sorghum_bicolor")
+```
+
+`find_trait_genes` returns 3–6 canonical gene symbols per trait, each
+tagged with the species in which it was characterized and a one-line
+function. Trigger criteria:
+
+- **Use it whenever the user names a trait but not a gene.** That covers
+  the vast majority of grower-scientist questions.
+- **Use it before `get_orthologs`** — the atlas tells you which gene to
+  translate. Without it, you'd be guessing.
+- **Don't use it for "what does gene X do?"** — that's `lookup_gene`
+  followed by reading the `description` field.
+
+The atlas is a starting-point literature map, **not a closed list**. If
+the user names a trait that isn't covered, fall back to literature search
+plus `lookup_gene` on a known gene symbol from that literature.
+
+Available trait categories (18 as of this release):
+drought_tolerance, salt_tolerance, cold_tolerance, heat_tolerance,
+submergence_tolerance, nitrogen_use_efficiency, phosphorus_uptake,
+iron_uptake, mycorrhizal_symbiosis, rhizobial_nodulation,
+root_architecture, defense_jasmonate, terpene_biosynthesis,
+glucosinolate_biosynthesis, flowering_photoperiod, plant_height_dwarfing,
+tiller_branching, aluminum_tolerance.
 
 ### Step 0: Identify the species
 
@@ -218,14 +252,17 @@ User: *"I'm working with a sorghum landrace that handles drought really
 well. What's known about the rice-style drought TFs in sorghum?"*
 
 1. Recognize this as: known stress-response transcription factor family
-   (DREB1A is the canonical entry point) + cross-species ortholog
-   question. Route to Cultivars (not TinyLLamaFarmer — they're asking
-   for molecular grounding, not field method).
-2. `lookup_gene("DREB1A", species="arabidopsis_thaliana")` → confirm
-   the canonical reference.
+   + cross-species ortholog question. Route to Cultivars (not
+   TinyLLamaFarmer — they're asking for molecular grounding, not field
+   method).
+2. `find_trait_genes(trait="drought_tolerance", target_species="sorghum_bicolor")`
+   → surfaces DREB1A, DREB2A, SnRK2.6/OST1, RD29A, HVA1, DRO1 as
+   canonical entries, with characterized species noted. Now you have
+   a *list* of genes to translate, not just one.
 3. `get_orthologs("DREB1A", species="arabidopsis_thaliana",
    target_species="sorghum_bicolor")` → return the sorghum ortholog
-   stable IDs and their homology types.
+   stable IDs and their homology types. Repeat for the other genes the
+   user finds most interesting.
 4. `lookup_gene(<stable_id>, species="sorghum_bicolor")` for the most
    one2one ortholog to get coordinates and description.
 5. Optionally `search_variants_in_region` over that locus — sorghum

@@ -23,8 +23,5 @@ dist/
 .agents/
 .claude/worktrees/
 
-# Scratch / draft tests that predate the current API surface
-tests/
-
 # uv lockfile (not currently tracked — uncomment to track for reproducibility)
 uv.lock

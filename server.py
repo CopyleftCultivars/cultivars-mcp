@@ -110,7 +110,18 @@ mcp = FastMCP(
         "via the Ensembl Compara plant tree. Essential for grower-"
         "scientists working with heritage crops where the molecular "
         "literature is sparse.\n"
-        "8. get_sequence — fetch genomic / cDNA / CDS / protein sequence.\n\n"
+        "8. get_sequence — fetch genomic / cDNA / CDS / protein sequence.\n"
+        "9. list_trait_categories — discover the 18 curated natural-"
+        "farming-relevant trait categories (drought / salt / cold / heat / "
+        "submergence tolerance, N-use efficiency, P uptake, mycorrhizal "
+        "symbiosis, rhizobial nodulation, root architecture, defense, "
+        "terpene / glucosinolate biosynthesis, flowering, dwarfing, "
+        "tillering, aluminum tolerance).\n"
+        "10. find_trait_genes — when the user names a TRAIT but not a "
+        "gene ('what's known about drought tolerance in sorghum?'), this "
+        "is the fastest grounding. Returns canonical gene symbols + the "
+        "species each was characterized in. Pair with get_orthologs to "
+        "translate to the user's actual crop.\n\n"
         "Coordinate convention: Ensembl is 1-based, fully-closed (same as "
         "VCF / GFF). Region strings are 'chrom:start-end' with optional "
         "':strand' (default +1). No 'chr' prefix on plant chromosomes — "
@@ -125,6 +136,211 @@ mcp = FastMCP(
         "remain the other lenses, and this tool does not replace them."
     ),
 )
+
+
+# ---------------------------------------------------------------------------
+# Trait atlas — curated map from natural-farming-relevant traits to canonical
+# gene families. The point: turn this MCP from "wraps Ensembl" into "wraps
+# Ensembl with grower-scientist domain knowledge baked in".
+#
+# Sources are the canonical plant-molecular-biology literature (Yamaguchi-
+# Shinozaki/Shinozaki on DREB; Schroeder on SOS pathway; Oldroyd on
+# rhizobial/mycorrhizal symbiosis; Khush on Green Revolution dwarfing;
+# Sasaki/Maron on Al tolerance; etc.). The atlas is not exhaustive — it's a
+# starting-point map for LLM agents serving grower-scientists. Treat each
+# entry as a literature handle, not a closed list.
+# ---------------------------------------------------------------------------
+
+TRAIT_ATLAS = {
+    "drought_tolerance": {
+        "description": "Genes governing water-deficit response, including ABA signaling, osmotic-stress regulons, and dehydration-responsive transcription factors.",
+        "natural_farming_relevance": "Foundational for marginal-land smallholder agriculture and for landrace varieties selected over centuries on rain-fed plots.",
+        "genes": [
+            {"symbol": "DREB1A", "alias": "CBF3", "characterized_in": "arabidopsis_thaliana", "function": "Master TF activating the cold/drought response regulon; the canonical entry point for drought engineering."},
+            {"symbol": "DREB2A", "characterized_in": "arabidopsis_thaliana", "function": "TF activating osmotic-stress genes under drought and heat."},
+            {"symbol": "SnRK2.6", "alias": "OST1", "characterized_in": "arabidopsis_thaliana", "function": "ABA-activated kinase, central to stomatal closure under water deficit."},
+            {"symbol": "RD29A", "alias": "COR78", "characterized_in": "arabidopsis_thaliana", "function": "Dehydration-responsive marker gene; classical DREB1A target."},
+            {"symbol": "HVA1", "characterized_in": "hordeum_vulgare", "function": "Group 3 LEA protein; barley drought-tolerance marker, transgene-validated in rice and wheat."},
+            {"symbol": "DRO1", "characterized_in": "oryza_sativa", "function": "Deeper-rooting QTL — promotes vertical root growth and drought avoidance in rice."},
+        ],
+    },
+    "salt_tolerance": {
+        "description": "Salt Overly Sensitive (SOS) pathway, vacuolar sodium sequestration, and root-to-shoot Na+ exclusion.",
+        "natural_farming_relevance": "Critical for coastal and irrigated-arid smallholder farming where soil salinization is rising.",
+        "genes": [
+            {"symbol": "SOS1", "characterized_in": "arabidopsis_thaliana", "function": "Plasma-membrane Na+/H+ antiporter; root-tip sodium extrusion."},
+            {"symbol": "SOS2", "alias": "CIPK24", "characterized_in": "arabidopsis_thaliana", "function": "Kinase activating SOS1 under salt; signal-relay step."},
+            {"symbol": "SOS3", "alias": "CBL4", "characterized_in": "arabidopsis_thaliana", "function": "Ca2+ sensor that perceives salt-induced cytosolic Ca2+ spike."},
+            {"symbol": "NHX1", "characterized_in": "arabidopsis_thaliana", "function": "Vacuolar Na+/H+ antiporter — sequesters cytotoxic sodium away from cytoplasm."},
+            {"symbol": "HKT1", "characterized_in": "arabidopsis_thaliana", "function": "Na+ transporter; xylem unloading limits Na+ shoot accumulation."},
+            {"symbol": "OsHKT1;5", "characterized_in": "oryza_sativa", "function": "Rice ortholog of HKT1; Saltol QTL on chromosome 1 in salt-tolerant Pokkali landrace."},
+        ],
+    },
+    "cold_tolerance": {
+        "description": "Cold-responsive CBF regulon and freezing-tolerance effectors (osmoprotectants, antifreeze proteins).",
+        "natural_farming_relevance": "Vital for high-latitude and high-altitude smallholder farming and heritage-variety winter hardiness.",
+        "genes": [
+            {"symbol": "CBF1", "alias": "DREB1B", "characterized_in": "arabidopsis_thaliana", "function": "Cold-induced TF; activates COR genes."},
+            {"symbol": "CBF2", "alias": "DREB1C", "characterized_in": "arabidopsis_thaliana", "function": "Cold-induced TF, partially redundant with CBF1/3."},
+            {"symbol": "ICE1", "characterized_in": "arabidopsis_thaliana", "function": "MYC-like TF; cold-signal upstream activator of CBF expression."},
+            {"symbol": "COR15A", "characterized_in": "arabidopsis_thaliana", "function": "Chloroplast-localized cryoprotectant; classical CBF target."},
+        ],
+    },
+    "heat_tolerance": {
+        "description": "Heat-shock factors (HSFs), HSP chaperones, and reactive-oxygen-species detox under thermal stress.",
+        "natural_farming_relevance": "Increasingly central as growing-season heat extremes intensify in tropical and sub-tropical smallholder zones.",
+        "genes": [
+            {"symbol": "HsfA1a", "characterized_in": "solanum_lycopersicum", "function": "Master heat-shock TF in tomato; loss-of-function reduces basal and acquired thermotolerance."},
+            {"symbol": "HsfA2", "characterized_in": "arabidopsis_thaliana", "function": "Sustains heat response after the initial HsfA1 spike."},
+            {"symbol": "HSP70", "characterized_in": "arabidopsis_thaliana", "function": "Canonical chaperone refolding heat-denatured proteins; family of ~14 in Arabidopsis."},
+            {"symbol": "HSP101", "alias": "ClpB", "characterized_in": "arabidopsis_thaliana", "function": "AAA+ disaggregase; required for acquired thermotolerance."},
+        ],
+    },
+    "submergence_tolerance": {
+        "description": "Rice-specific quiescence vs. escape strategies under flooding; SUB1 (quiescence) and SK1/2 (escape) loci.",
+        "natural_farming_relevance": "Hugely important for monsoon-region smallholder rice farmers; SUB1 introgression into mega-varieties was a landmark public-sector breeding success.",
+        "genes": [
+            {"symbol": "SUB1A", "characterized_in": "oryza_sativa", "function": "ERF TF on chromosome 9; suppresses elongation under submergence (quiescence strategy) — basis of Swarna-Sub1 and similar flood-tolerant landrace introgressions."},
+            {"symbol": "SK1", "characterized_in": "oryza_sativa", "function": "ERF TF in deepwater rice; promotes internode elongation (escape strategy)."},
+            {"symbol": "SK2", "characterized_in": "oryza_sativa", "function": "Paralog of SK1; same elongation-promoting role under submergence."},
+        ],
+    },
+    "nitrogen_use_efficiency": {
+        "description": "Nitrate / ammonium transport and assimilation — uptake, root-to-shoot translocation, and reduction to glutamine.",
+        "natural_farming_relevance": "Central to KNF / natural-farming nutrient cycling without synthetic fertilizer; high-NUE varieties extract more from the same biologically-managed soil.",
+        "genes": [
+            {"symbol": "NRT1.1", "alias": "NPF6.3, CHL1", "characterized_in": "arabidopsis_thaliana", "function": "Dual-affinity nitrate transceptor; also signals nitrate status."},
+            {"symbol": "NRT2.1", "characterized_in": "arabidopsis_thaliana", "function": "High-affinity nitrate transporter; dominant under low-N conditions."},
+            {"symbol": "NRT1.1B", "alias": "OsNPF6.5", "characterized_in": "oryza_sativa", "function": "Indica-allele variant underlies superior N-use efficiency in indica vs. japonica rice — landrace breeding target."},
+            {"symbol": "AMT1.1", "characterized_in": "arabidopsis_thaliana", "function": "High-affinity ammonium transporter; dominant N source under acidic-soil / paddy conditions."},
+            {"symbol": "GS1", "characterized_in": "arabidopsis_thaliana", "function": "Cytosolic glutamine synthetase; assimilates NH4+ into glutamine."},
+        ],
+    },
+    "phosphorus_uptake": {
+        "description": "Inorganic phosphate (Pi) uptake transporters and the systemic Pi-starvation response.",
+        "natural_farming_relevance": "Phosphorus is the limiting nutrient on weathered tropical soils common to smallholder agriculture; high-P-efficiency varieties + mycorrhizal symbiosis are the natural-farming answer to fertilizer P.",
+        "genes": [
+            {"symbol": "PHT1.1", "characterized_in": "arabidopsis_thaliana", "function": "Root high-affinity Pi transporter."},
+            {"symbol": "PHO2", "alias": "UBC24", "characterized_in": "arabidopsis_thaliana", "function": "E2 ubiquitin ligase that down-regulates Pi uptake under P-replete conditions; miR399 target."},
+            {"symbol": "PHR1", "characterized_in": "arabidopsis_thaliana", "function": "Master TF of the Pi-starvation response."},
+            {"symbol": "PSTOL1", "characterized_in": "oryza_sativa", "function": "Phosphorus-Starvation Tolerance 1 — protein kinase; the Kasalath landrace allele dramatically improves rice P uptake on low-P soils. A canonical public-sector breeding success."},
+        ],
+    },
+    "iron_uptake": {
+        "description": "Strategy I (reductive) and Strategy II (chelative) iron acquisition under Fe-limited soils.",
+        "natural_farming_relevance": "Iron biofortification + uptake-on-calcareous-soils are smallholder-nutrition priorities (HarvestPlus etc.).",
+        "genes": [
+            {"symbol": "IRT1", "characterized_in": "arabidopsis_thaliana", "function": "Root Fe2+ transporter (Strategy I); also takes up Zn, Mn, Cd — bottleneck for biofortification AND cadmium-accumulation."},
+            {"symbol": "FRO2", "characterized_in": "arabidopsis_thaliana", "function": "Root-surface Fe3+ reductase; Strategy I."},
+            {"symbol": "FIT", "alias": "FER", "characterized_in": "arabidopsis_thaliana", "function": "bHLH TF; master regulator of Strategy I Fe response."},
+            {"symbol": "IDS3", "characterized_in": "hordeum_vulgare", "function": "Mugineic-acid biosynthesis; grass Strategy II Fe chelator."},
+        ],
+    },
+    "mycorrhizal_symbiosis": {
+        "description": "Common symbiosis (SYM) pathway enabling arbuscular mycorrhizal (AM) fungal colonization of root cells.",
+        "natural_farming_relevance": "Central to Korean Natural Farming and JADAM nutrient strategies — AM fungi extend root reach and bridge plants to P, Zn, water. Most flowering plants are AM-competent.",
+        "genes": [
+            {"symbol": "SYMRK", "alias": "DMI2", "characterized_in": "medicago_truncatula", "function": "LRR receptor-like kinase essential for both AM and rhizobial symbiosis."},
+            {"symbol": "CCaMK", "alias": "DMI3", "characterized_in": "medicago_truncatula", "function": "Ca2+/calmodulin-dependent kinase decoding the symbiosis-specific calcium spike."},
+            {"symbol": "DMI1", "characterized_in": "medicago_truncatula", "function": "Cation channel required for symbiosis Ca2+ signaling."},
+            {"symbol": "PT4", "alias": "PHT1;4", "characterized_in": "medicago_truncatula", "function": "Arbuscule-specific Pi transporter — receives P from the fungal symbiont."},
+            {"symbol": "RAM1", "characterized_in": "medicago_truncatula", "function": "GRAS-domain TF required for arbuscule branching and maintenance."},
+            {"symbol": "DELLA", "characterized_in": "arabidopsis_thaliana", "function": "GA-signaling repressor — required for AM colonization; ties symbiosis to gibberellin signaling."},
+        ],
+    },
+    "rhizobial_nodulation": {
+        "description": "Legume-specific nitrogen-fixing root-nodule symbiosis with rhizobia; shares the SYM pathway upstream with mycorrhizal signaling.",
+        "natural_farming_relevance": "The atmospheric-N-fixation engine of legume-based natural farming and cover cropping (cowpea, common bean, hairy vetch, faba bean).",
+        "genes": [
+            {"symbol": "NFR1", "characterized_in": "lotus_japonicus", "function": "LysM receptor kinase perceiving rhizobial Nod factor."},
+            {"symbol": "NFR5", "characterized_in": "lotus_japonicus", "function": "Co-receptor of NFR1 for Nod-factor perception."},
+            {"symbol": "NIN", "characterized_in": "lotus_japonicus", "function": "Nodulation-specific TF — master regulator of nodule organogenesis."},
+            {"symbol": "ERN1", "characterized_in": "medicago_truncatula", "function": "ERF TF required for infection-thread formation."},
+            {"symbol": "NSP1", "characterized_in": "medicago_truncatula", "function": "GRAS-domain TF activating early Nod-factor responses."},
+        ],
+    },
+    "root_architecture": {
+        "description": "Lateral-root development, root depth, and root-hair density — the plant's interface with soil.",
+        "natural_farming_relevance": "Root architecture is the *physical* interface to KNF-managed soil biology; deeper / denser / hairier roots = more rhizosphere recruitment, more drought escape, more nutrient capture.",
+        "genes": [
+            {"symbol": "PIN2", "characterized_in": "arabidopsis_thaliana", "function": "Auxin efflux carrier directing root-tip gravitropism."},
+            {"symbol": "ARF7", "characterized_in": "arabidopsis_thaliana", "function": "Auxin response factor; master regulator of lateral-root initiation."},
+            {"symbol": "LBD16", "characterized_in": "arabidopsis_thaliana", "function": "Lateral-organ-boundary TF; specifies lateral-root founder cells."},
+            {"symbol": "RHD6", "characterized_in": "arabidopsis_thaliana", "function": "bHLH TF; master regulator of root-hair cell fate."},
+            {"symbol": "DRO1", "characterized_in": "oryza_sativa", "function": "Deep-Rooting 1 — promotes vertical root growth; drought-avoidance QTL."},
+        ],
+    },
+    "defense_jasmonate": {
+        "description": "Jasmonic acid signaling pathway — defense against necrotrophic pathogens and chewing herbivores.",
+        "natural_farming_relevance": "Direct counterpart in plants to KNF's natural-pest-management strategies; understanding which alleles support strong JA signaling helps select pest-tolerant landraces.",
+        "genes": [
+            {"symbol": "COI1", "characterized_in": "arabidopsis_thaliana", "function": "F-box JA receptor; the core JA-Ile binding component."},
+            {"symbol": "MYC2", "characterized_in": "arabidopsis_thaliana", "function": "Master JA-responsive bHLH TF."},
+            {"symbol": "LOX2", "characterized_in": "arabidopsis_thaliana", "function": "Lipoxygenase — early JA biosynthesis."},
+            {"symbol": "JAR1", "characterized_in": "arabidopsis_thaliana", "function": "JA-amino acid synthetase — produces bioactive JA-Ile conjugate."},
+            {"symbol": "JAZ1", "characterized_in": "arabidopsis_thaliana", "function": "Repressor of MYC2 in unstressed state — degraded by COI1-SCF in response to JA-Ile."},
+        ],
+    },
+    "terpene_biosynthesis": {
+        "description": "Terpene synthases — mono-, sesqui- and diterpenes underlying aroma, allelopathy, herbivore deterrence, pollinator attraction.",
+        "natural_farming_relevance": "Aroma / pungency / allelopathy in heritage varieties tracks terpene-synthase allele diversity. Strong overlap with Cannabis sativa cultivar work (terpene profiles), even though Cannabis genomics has to be done outside Ensembl Plants.",
+        "genes": [
+            {"symbol": "TPS21", "characterized_in": "arabidopsis_thaliana", "function": "Sesquiterpene synthase producing (E)-β-caryophyllene."},
+            {"symbol": "TPS10", "characterized_in": "zea_mays", "function": "Maize sesquiterpene synthase; (E)-β-farnesene production for indirect parasitoid recruitment."},
+            {"symbol": "STO1", "characterized_in": "oryza_sativa", "function": "Diterpene synthase; precursor to momilactones (rice allelopathic compounds)."},
+            {"symbol": "OsKSL4", "characterized_in": "oryza_sativa", "function": "Kaurene synthase-like — momilactone biosynthesis cluster on chromosome 4."},
+        ],
+    },
+    "glucosinolate_biosynthesis": {
+        "description": "Sulfur-containing defense metabolites unique to Brassicales; precursors to mustard oils.",
+        "natural_farming_relevance": "Glucosinolate content drives biofumigation potential of Brassica cover crops (mustard / radish), pest deterrence in heritage Brassica vegetables, and pungency / flavor profiles.",
+        "genes": [
+            {"symbol": "MYB28", "characterized_in": "arabidopsis_thaliana", "function": "TF regulating aliphatic glucosinolate biosynthesis."},
+            {"symbol": "MYB29", "characterized_in": "arabidopsis_thaliana", "function": "Partially redundant with MYB28 for aliphatic GS regulation."},
+            {"symbol": "MYB51", "characterized_in": "arabidopsis_thaliana", "function": "TF regulating indolic glucosinolate biosynthesis."},
+            {"symbol": "CYP79B2", "characterized_in": "arabidopsis_thaliana", "function": "Cytochrome P450 — first committed step in indolic GS biosynthesis from tryptophan."},
+        ],
+    },
+    "flowering_photoperiod": {
+        "description": "Photoperiodic flowering regulation; FT-CO module and floral repressors.",
+        "natural_farming_relevance": "Latitude-of-origin and growing-season-fit are heritage-variety properties governed by these genes; understanding them helps seed-keepers reason about why a variety doesn't bolt or fails to flower at a new latitude.",
+        "genes": [
+            {"symbol": "FT", "characterized_in": "arabidopsis_thaliana", "function": "Florigen — phloem-mobile signal triggering flowering."},
+            {"symbol": "CO", "alias": "CONSTANS", "characterized_in": "arabidopsis_thaliana", "function": "Photoperiod-sensitive TF activating FT in long days."},
+            {"symbol": "FLC", "characterized_in": "arabidopsis_thaliana", "function": "MADS-box floral repressor silenced by vernalization."},
+            {"symbol": "VRN1", "characterized_in": "triticum_aestivum", "function": "Wheat VRN1 — vernalization response; spring vs. winter wheat allelic basis."},
+            {"symbol": "Hd1", "characterized_in": "oryza_sativa", "function": "Rice CO ortholog; heading-date QTL underlying photoperiod adaptation across rice latitudes."},
+        ],
+    },
+    "plant_height_dwarfing": {
+        "description": "Gibberellin-signaling alleles underlying the Green Revolution semi-dwarf phenotype.",
+        "natural_farming_relevance": "Dwarfing alleles trade off against root depth and lodging resistance vs. yield-under-irrigation. Heritage tall varieties carry recessive *wild-type* alleles at these loci — relevant to context-specific landrace selection.",
+        "genes": [
+            {"symbol": "SD1", "characterized_in": "oryza_sativa", "function": "GA20 oxidase — IR8 'miracle rice' semi-dwarf allele underlying the rice Green Revolution."},
+            {"symbol": "Rht-B1", "characterized_in": "triticum_aestivum", "function": "Wheat DELLA — gain-of-function alleles cause Norin-10 semi-dwarfing."},
+            {"symbol": "D8", "characterized_in": "zea_mays", "function": "Maize DELLA; dwarfing allele used in some hybrid backgrounds."},
+        ],
+    },
+    "tiller_branching": {
+        "description": "Strigolactone signaling and TB1-family TFs governing shoot branching / tillering architecture.",
+        "natural_farming_relevance": "Tiller number is a primary yield-architecture lever in cereals; landrace selection often shifts this trait toward the local growing system.",
+        "genes": [
+            {"symbol": "TB1", "alias": "tb1", "characterized_in": "zea_mays", "function": "TCP-domain TF — single locus underlying the most dramatic morphological difference between maize and teosinte (suppressed tillering)."},
+            {"symbol": "MAX2", "characterized_in": "arabidopsis_thaliana", "function": "F-box strigolactone-signaling component; loss-of-function = bushy shoots."},
+            {"symbol": "D14", "characterized_in": "oryza_sativa", "function": "Strigolactone receptor in rice."},
+            {"symbol": "MOC1", "characterized_in": "oryza_sativa", "function": "GRAS TF promoting tiller bud outgrowth."},
+        ],
+    },
+    "aluminum_tolerance": {
+        "description": "Root organic-acid efflux (malate / citrate) chelating Al3+ in acidic soils, and the STOP1 transcriptional regulator above it.",
+        "natural_farming_relevance": "Al toxicity is THE major constraint on crop yield on acidic tropical soils — the soils where many smallholder farmers work and where heritage landraces have been selected for tolerance over generations.",
+        "genes": [
+            {"symbol": "ALMT1", "characterized_in": "triticum_aestivum", "function": "Root-tip malate efflux transporter — first cloned Al-tolerance gene; classical wheat tolerance allele."},
+            {"symbol": "MATE1", "alias": "AltSB", "characterized_in": "sorghum_bicolor", "function": "Root citrate efflux; the major sorghum Al-tolerance gene (Magalhães et al.)."},
+            {"symbol": "STOP1", "characterized_in": "arabidopsis_thaliana", "function": "Zn-finger TF activating ALMT1 and other Al-tolerance genes under acidic conditions."},
+        ],
+    },
+}
 
 
 def _community_fallback(species: str, tool: str) -> dict | None:
@@ -150,9 +366,46 @@ def _community_fallback(species: str, tool: str) -> dict | None:
 
 _JSON_HEADERS = {"Accept": "application/json"}
 
+# Ensembl REST publishes a ~15 req/s soft limit and returns 429 with a
+# Retry-After header when exceeded. The Ensembl best-practices guide also
+# notes that 503s during scheduled maintenance / overloaded backend should
+# be retried with backoff.
+_RETRY_STATUS = {429, 503}
+_MAX_RETRIES = 3
+_BASE_BACKOFF_SECONDS = 0.5
+
+
+# Test seam: tests inject an httpx.MockTransport via _CLIENT_FACTORY override.
+# In normal use this is None and a real client is constructed each call.
+_CLIENT_FACTORY: "callable[[], httpx.Client] | None" = None
+
 
 def _get_client() -> httpx.Client:
+    if _CLIENT_FACTORY is not None:
+        return _CLIENT_FACTORY()
     return httpx.Client(base_url=BASE_URL, headers=_JSON_HEADERS, timeout=30)
+
+
+def _get_with_retry(client: httpx.Client, path: str, **kwargs) -> httpx.Response:
+    """GET wrapper that honors Ensembl's Retry-After on 429/503.
+
+    On retryable status: read Retry-After (seconds or HTTP-date — Ensembl
+    sends seconds), cap at 30s, sleep, retry. After _MAX_RETRIES, returns
+    the last response without raising — callers continue with their normal
+    status-code handling.
+    """
+    for attempt in range(_MAX_RETRIES + 1):
+        resp = client.get(path, **kwargs)
+        if resp.status_code not in _RETRY_STATUS or attempt == _MAX_RETRIES:
+            return resp
+        retry_after = resp.headers.get("Retry-After")
+        try:
+            wait = float(retry_after) if retry_after else _BASE_BACKOFF_SECONDS * (2 ** attempt)
+        except ValueError:
+            wait = _BASE_BACKOFF_SECONDS * (2 ** attempt)
+        wait = min(wait, 30.0)
+        time.sleep(wait)
+    return resp  # unreachable, satisfies type-checker
 
 
 def _ensembl_gene_url(species: str, gene_id: str | None) -> str | None:
@@ -191,7 +444,7 @@ def list_plant_species(query: str | None = None) -> dict:
                Omit to list all ~80 plant species (the response is large).
     """
     with _get_client() as client:
-        resp = client.get("/info/species", params={"division": "EnsemblPlants"})
+        resp = _get_with_retry(client, "/info/species", params={"division": "EnsemblPlants"})
         resp.raise_for_status()
         all_species = resp.json().get("species", [])
 
@@ -253,10 +506,10 @@ def lookup_gene(gene: str, species: str | None = None, expand: bool = False) -> 
         # Try stable-ID lookup first (works across species without specifying).
         # Ensembl returns 400 (not 404) when the value isn't a valid stable ID
         # at all (e.g. a gene symbol like "PHYB") — treat 400 and 404 alike.
-        resp = client.get(f"/lookup/id/{g}", params=params)
+        resp = _get_with_retry(client, f"/lookup/id/{g}", params=params)
         if resp.status_code in (400, 404):
             # Fall back to symbol lookup, which requires species.
-            resp = client.get(f"/lookup/symbol/{species}/{g}", params=params)
+            resp = _get_with_retry(client, f"/lookup/symbol/{species}/{g}", params=params)
             if resp.status_code in (400, 404):
                 return {
                     "error": "Gene not found",
@@ -323,7 +576,8 @@ def search_variants_in_region(
         return fallback
 
     with _get_client() as client:
-        resp = client.get(
+        resp = _get_with_retry(
+            client,
             f"/overlap/region/{species}/{r}",
             params={"feature": "variation"},
         )
@@ -390,7 +644,7 @@ def get_variant(variant_id: str, species: str | None = None) -> dict:
         return fallback
 
     with _get_client() as client:
-        resp = client.get(f"/variation/{species}/{vid}")
+        resp = _get_with_retry(client, f"/variation/{species}/{vid}")
         if resp.status_code == 404:
             return {
                 "error": "Variant not found",
@@ -480,7 +734,7 @@ def predict_variant_effect(
             a = allele.strip()
             path = f"/vep/{species}/region/{r}/{a}"
 
-        resp = client.get(path)
+        resp = _get_with_retry(client, path)
         if resp.status_code == 400:
             return {
                 "error": "VEP rejected the request",
@@ -588,7 +842,7 @@ def compare_variants(variant_ids: list[str], species: str | None = None) -> dict
             if not vid:
                 rows.append({"variant_id": vid, "error": "empty ID"})
                 continue
-            resp = client.get(f"/variation/{species}/{vid}")
+            resp = _get_with_retry(client, f"/variation/{species}/{vid}")
             if resp.status_code == 404:
                 rows.append({"variant_id": vid, "error": "Variant not found"})
                 continue
@@ -653,10 +907,10 @@ def get_orthologs(
     with _get_client() as client:
         # Stable-ID first, fall back to symbol. Ensembl returns 400 for
         # non-ID inputs (gene symbols); treat 400 and 404 alike.
-        resp = client.get(f"/homology/id/{g}", params=params)
+        resp = _get_with_retry(client, f"/homology/id/{g}", params=params)
         used_route = "id"
         if resp.status_code in (400, 404):
-            resp = client.get(f"/homology/symbol/{species}/{g}", params=params)
+            resp = _get_with_retry(client, f"/homology/symbol/{species}/{g}", params=params)
             used_route = "symbol"
             if resp.status_code in (400, 404):
                 return {
@@ -722,7 +976,7 @@ def get_sequence(
         }
 
     with _get_client() as client:
-        resp = client.get(f"/sequence/id/{sid}", params={"type": seq_type})
+        resp = _get_with_retry(client, f"/sequence/id/{sid}", params={"type": seq_type})
         if resp.status_code == 404:
             return {"error": "Stable ID not found", "stable_id": sid}
         if resp.status_code == 400:
@@ -743,6 +997,118 @@ def get_sequence(
         "sequence": data.get("seq"),
         "description": data.get("desc"),
     }
+
+
+@mcp.tool()
+def list_trait_categories() -> dict:
+    """List the curated natural-farming-relevant trait categories.
+
+    Returns the keys you can pass to `find_trait_genes` plus a short
+    description and the count of canonical genes recorded for each trait.
+
+    The atlas is intentionally selective — a starting-point map for
+    grower-scientists, not an exhaustive ontology. For each trait, the
+    returned genes are characterized in a specific plant species
+    (typically Arabidopsis, sometimes rice / wheat / sorghum / Medicago);
+    use `get_orthologs` to translate to the species you actually grow.
+    """
+    return {
+        "trait_count": len(TRAIT_ATLAS),
+        "traits": {
+            key: {
+                "description": info["description"],
+                "natural_farming_relevance": info["natural_farming_relevance"],
+                "gene_count": len(info["genes"]),
+            }
+            for key, info in TRAIT_ATLAS.items()
+        },
+        "note": (
+            "Curated literature handles, not a closed list. Use "
+            "find_trait_genes(trait_key) to drill in, then get_orthologs "
+            "to translate canonical species findings to your crop."
+        ),
+    }
+
+
+@mcp.tool()
+def find_trait_genes(trait: str, target_species: str | None = None) -> dict:
+    """Look up canonical genes for a natural-farming-relevant plant trait.
+
+    Returns the curated gene list (symbol, alias, species in which it was
+    characterized, one-line function). For Copyleft Cultivars audiences,
+    use this as the starting point when a grower-scientist asks about a
+    trait without naming a specific gene: "what's known about drought
+    tolerance in sorghum?", "which genes underlie symbiosis with
+    mycorrhiza?", "what regulates flowering at my latitude?"
+
+    Args:
+        trait: One of the keys from list_trait_categories — e.g.
+               'drought_tolerance', 'nitrogen_use_efficiency',
+               'mycorrhizal_symbiosis', 'aluminum_tolerance',
+               'flowering_photoperiod'. Loose matching is applied:
+               'drought' will find 'drought_tolerance'.
+        target_species: Optional. If provided, the response includes a
+                        hint to follow up with get_orthologs for each gene
+                        to translate from the characterized species to
+                        the target. This tool does NOT issue the ortholog
+                        calls itself — calling N HTTP endpoints implicitly
+                        would be expensive and obscure failures. The LLM
+                        should call get_orthologs explicitly for the
+                        genes it wants to follow up on.
+
+    Returns the trait description, the natural-farming relevance note,
+    and the gene list. If the trait is unknown, returns the list of
+    available trait keys.
+    """
+    t = (trait or "").strip().lower().replace(" ", "_").replace("-", "_")
+    if not t:
+        return {
+            "error": "trait argument is required",
+            "available_traits": sorted(TRAIT_ATLAS.keys()),
+        }
+
+    # Exact match first
+    entry = TRAIT_ATLAS.get(t)
+    matched_key = t if entry else None
+
+    # Loose match: any trait whose key contains the input
+    if not entry:
+        candidates = [k for k in TRAIT_ATLAS if t in k]
+        if len(candidates) == 1:
+            matched_key = candidates[0]
+            entry = TRAIT_ATLAS[matched_key]
+        elif len(candidates) > 1:
+            return {
+                "error": f"trait {trait!r} is ambiguous",
+                "candidates": candidates,
+            }
+
+    if not entry:
+        return {
+            "error": f"trait {trait!r} not in the curated atlas",
+            "available_traits": sorted(TRAIT_ATLAS.keys()),
+            "note": "The trait atlas is intentionally selective. If your trait isn't here, lookup_gene + get_orthologs on a literature-cited gene symbol is the next step.",
+        }
+
+    result = {
+        "trait": matched_key,
+        "description": entry["description"],
+        "natural_farming_relevance": entry["natural_farming_relevance"],
+        "gene_count": len(entry["genes"]),
+        "genes": entry["genes"],
+    }
+    if target_species:
+        result["target_species"] = _normalize_species(target_species)
+        result["followup_hint"] = (
+            f"To find the equivalent gene(s) in {result['target_species']}, "
+            "call get_orthologs(gene=<symbol>, species=<characterized_in>, "
+            f"target_species='{result['target_species']}') for each gene of "
+            "interest. Pay attention to ortholog_one2many results — plants "
+            "have undergone whole-genome duplications, so multiple paralogs "
+            "are common, especially in maize, wheat (hexaploid), and "
+            "sugarcane / sorghum."
+        )
+    return result
 
 
 def main():
