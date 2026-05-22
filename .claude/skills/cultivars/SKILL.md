@@ -1,7 +1,7 @@
 ---
 name: cultivars
-description: Plant-genomics lookup for grower-scientists, heritage breeders, and natural-farming researchers via the Ensembl Plants REST API. Use when the user mentions a specific plant gene (PHYB, DREB1A, OsCKX2, ZmRAP2.7), a plant gene ID (AT2G18790, Os01g0100100, Zm00001eb...), a plant species' variant, a genomic region in Arabidopsis / rice / maize / sorghum / common bean / cassava / tomato / sunflower / grape (and other Ensembl Plants species), or asks about cross-species orthology between plants ("what's the rice equivalent of this Arabidopsis gene?"). Trigger on questions about variant effects in plants, predicted impact of a plant SNP/indel, plant gene structure (transcripts, biotype, coordinates), plant gene sequences (genomic / cDNA / CDS / protein), or 1001 Genomes / 3K Rice Genomes variants. Trigger on questions about Cannabis sativa genetics too — the tool surfaces an honest gap notice with NCBI / Cannabis Genome DB pointers rather than failing silently. Do NOT trigger on general agronomic questions (fertilizer, irrigation, composting, IMO preparation, KNF inputs) — those belong to TinyLLamaFarmer / gemma4-natural-farming. Do NOT trigger on phenotypic breeding advice or on-farm trial design. Do NOT trigger on human or animal genetics.
-allowed-tools: mcp__cultivars__list_plant_species mcp__cultivars__lookup_gene mcp__cultivars__search_variants_in_region mcp__cultivars__get_variant mcp__cultivars__predict_variant_effect mcp__cultivars__compare_variants mcp__cultivars__get_orthologs mcp__cultivars__get_sequence mcp__cultivars__list_trait_categories mcp__cultivars__find_trait_genes
+description: Plant-genomics lookup for grower-scientists, heritage breeders, and natural-farming researchers across 5 live databases (Ensembl Plants, UniProt, Europe PMC, STRING-db, Medicinal Genomics Kannapedia) plus a 30-category curated trait atlas. Use when the user mentions a specific plant gene (PHYB, DREB1A, OsCKX2, ZmRAP2.7, THCAS, CBDAS), a plant gene ID (AT2G18790, Os01g0100100, Zm00001eb..., Q8GTB6 UniProt), a plant variant or genomic region, a plant trait by name (drought tolerance, mycorrhizal symbiosis, hemp THC compliance, etc.), or asks about cross-species orthology between plants. Trigger on Cannabis-specific questions — the tool has dedicated cannabinoid biosynthesis, terpene chemotype, hemp compliance, and Kannapedia-strain-lookup tools that work despite Cannabis sativa not being in Ensembl Plants. Trigger on questions about a Kannapedia RSP ID (rsp13536, rsp10837 etc.) or cannabis strain by name. Trigger on requests for "recent literature on gene X" — the search_pubmed_for_gene tool returns current papers. Trigger on protein-protein interaction questions ("what does SOS1 interact with?"). Do NOT trigger on general agronomic questions (fertilizer, irrigation, composting, IMO preparation, KNF inputs) — those belong to TinyLLamaFarmer / gemma4-natural-farming. Do NOT trigger on phenotypic breeding advice or on-farm trial design. Do NOT trigger on human or animal genetics.
+allowed-tools: mcp__cultivars__list_plant_species mcp__cultivars__lookup_gene mcp__cultivars__search_variants_in_region mcp__cultivars__get_variant mcp__cultivars__predict_variant_effect mcp__cultivars__compare_variants mcp__cultivars__get_orthologs mcp__cultivars__get_sequence mcp__cultivars__list_trait_categories mcp__cultivars__find_trait_genes mcp__cultivars__translate_trait_to_species mcp__cultivars__lookup_gene_evidence mcp__cultivars__lookup_uniprot_entry mcp__cultivars__search_pubmed_for_gene mcp__cultivars__get_string_interactions mcp__cultivars__lookup_kannapedia_strain mcp__cultivars__compare_cannabis_strains mcp__cultivars__cannabis_strain_search_urls mcp__cultivars__list_maize_nam_founders
 ---
 
 # Cultivars — Plant Genomics for the Commons
@@ -73,6 +73,36 @@ Copyleft Cultivars audience:
 **Not in Ensembl Plants** (but the tool returns a structured fallback):
 - `cannabis_sativa` — see NCBI CS10 reference, Cannabis Genome DB
 - Many heritage / orphan crops not yet sequenced to reference quality
+
+## Tool routing — which tool for which question
+
+The 19 tools cluster into seven query patterns. Use this table as the routing decision:
+
+| When the user asks... | Start with... | Then... |
+|---|---|---|
+| "What's known about [trait]?" | `list_trait_categories` then `find_trait_genes(trait=...)` | Optionally `lookup_uniprot_entry` for each canonical gene's full curation; or `search_pubmed_for_gene` for newer literature |
+| "What's the [crop] equivalent of [Arabidopsis gene]?" | `translate_trait_to_species` (composed) OR `get_orthologs` (one gene) | `lookup_gene_evidence` on the resolved ortholog if veracity matters |
+| "Tell me about gene X" | `lookup_gene` | Then `lookup_gene_evidence` for veracity tier + `lookup_uniprot_entry` for curated function |
+| "What does the literature say about gene X (recently)?" | `search_pubmed_for_gene(query="X species")` | Pass through 2025/2026 papers — the LIVING document |
+| "What variants exist in this region?" | `search_variants_in_region` | Then `predict_variant_effect` or `get_variant` for specifics |
+| "Tell me about cannabis strain rspNNNNN" | `lookup_kannapedia_strain(rsp_id=...)` | For multiple strains, `compare_cannabis_strains` (max 5) |
+| "What proteins interact with X?" | `get_string_interactions` | Surface evidence channels (textmining vs experimental) so user can grade |
+
+### Cannabis-specific routing
+
+When the user mentions Cannabis sativa, hemp, a chemotype (Type I/II/III), or any cannabinoid/terpene synthase:
+1. If they have an RSP ID → `lookup_kannapedia_strain` directly
+2. If they have a strain name → `cannabis_strain_search_urls` to give them search links
+3. If they ask about chemotype genetics → `find_trait_genes(trait="cannabinoid_biosynthesis")` and `find_trait_genes(trait="hemp_compliance")`
+4. For Cannabis protein function → `lookup_uniprot_entry(uniprot_id="Q8GTB6")` (THCAS) or similar — UniProt works despite Ensembl Plants gap
+5. For Cannabis interactions → `get_string_interactions(species="cannabis_sativa")` — STRING covers Cannabis (taxon 3483)
+
+### Maize / corn routing
+
+When the user mentions corn, maize, fall armyworm, sweet corn, popcorn, or heritage corn breeding:
+1. `find_trait_genes(trait="maize_disease_resistance" | "maize_pest_resistance" | "maize_quality_protein")`
+2. `list_maize_nam_founders(subpopulation="Tropical / Subtropical")` for smallholder-relevant breeding lines (CIMMYT CML + Thai Ki3/Ki11 + IITA Tzi8)
+3. Use `lookup_gene` on maize stable IDs (Zm00001eb...) directly
 
 ## How to use the tools
 

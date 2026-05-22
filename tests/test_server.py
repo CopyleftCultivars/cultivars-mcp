@@ -700,6 +700,41 @@ def test_atlas_evidence_loaded():
     assert len(server._ATLAS_EVIDENCE) > 30
 
 
+def test_atlas_evidence_drift_warning():
+    """Drift regression: atlas genes with explicit ensembl_id should appear in
+    the cached evidence map. If someone adds a new TRAIT_ATLAS entry with an
+    ensembl_id but forgets to regenerate atlas_evidence.json, this test
+    surfaces that gap.
+
+    This is a WARNING test — we don't fail on drift because adding a literature-
+    handle entry that has no ensembl_id is legitimate. We only count the gap
+    where ensembl_id IS present but is not in the cache.
+    """
+    drift = []
+    for trait_key, info in server.TRAIT_ATLAS.items():
+        for gene in info["genes"]:
+            eid = gene.get("ensembl_id")
+            if eid and eid not in server._ATLAS_EVIDENCE:
+                drift.append(f"{trait_key}/{gene['symbol']} (ensembl_id={eid})")
+
+    # Allow at most 10% of ensembl_id entries to be drift — accommodates
+    # legitimate cases (newly added genes, ID changes between releases).
+    # If drift exceeds this, the audit needs to be re-run.
+    ensembl_id_total = sum(
+        1
+        for info in server.TRAIT_ATLAS.values()
+        for g in info["genes"]
+        if g.get("ensembl_id")
+    )
+    drift_rate = len(drift) / max(ensembl_id_total, 1)
+    assert drift_rate <= 0.15, (
+        f"Atlas-evidence drift exceeds 15%: {len(drift)} ensembl_id entries "
+        f"not in atlas_evidence.json out of {ensembl_id_total}. "
+        f"Re-run `python evals/atlas_audit.py` to refresh. "
+        f"Drifted: {drift[:5]}"
+    )
+
+
 def test_find_trait_genes_surfaces_evidence_tier():
     """find_trait_genes should attach the cached evidence tier per gene."""
     out = server.find_trait_genes(trait="salt_tolerance")

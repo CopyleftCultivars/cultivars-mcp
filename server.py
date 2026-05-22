@@ -1472,7 +1472,7 @@ def lookup_kannapedia_strain(rsp_id: str) -> dict:
     url = f"/strains/rsp{rid}"
     with _kannapedia_client() as client:
         try:
-            resp = client.get(url)
+            resp = _get_with_retry(client, url)
         except httpx.HTTPError as e:
             return {
                 "error": f"Kannapedia fetch failed: {e}",
@@ -1881,7 +1881,7 @@ def lookup_uniprot_entry(uniprot_id: str) -> dict:
 
     with _uniprot_client() as client:
         try:
-            resp = client.get(f"/uniprotkb/{uid}")
+            resp = _get_with_retry(client, f"/uniprotkb/{uid}")
         except httpx.HTTPError as e:
             return {"error": f"UniProt fetch failed: {e}", "uniprot_id": uid}
         if resp.status_code == 404:
@@ -2006,7 +2006,7 @@ def search_pubmed_for_gene(query: str, page_size: int = 10) -> dict:
 
     with _europepmc_client() as client:
         try:
-            resp = client.get("/search", params={
+            resp = _get_with_retry(client, "/search", params={
                 "query": q,
                 "format": "json",
                 "resultType": "lite",
@@ -2120,7 +2120,7 @@ def get_string_interactions(
 
     with _string_client() as client:
         try:
-            resp = client.get("/json/network", params={
+            resp = _get_with_retry(client, "/json/network", params={
                 "identifiers": p,
                 "species": str(taxon),
                 "required_score": str(score_threshold),
