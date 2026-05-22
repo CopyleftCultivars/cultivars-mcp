@@ -728,6 +728,235 @@ def test_find_trait_genes_evidence_none_when_uncurated():
     assert sk1.get("evidence") is None
 
 
+# ---------------------------------------------------------------------------
+# Kannapedia integration tests
+# ---------------------------------------------------------------------------
+
+
+_KANNAPEDIA_SAMPLE_HTML = """
+<html>
+<head><title>Mystery Skunk x Wedding Cake | Kannapedia</title></head>
+<body>
+<h1>Mystery Skunk x Wedding Cake</h1>
+<div class="StrainInfo--registrant"> Grower: <a class="SearchLink" href="/strains?source=Heritage+Genetics"> Heritage Genetics <svg></svg></a></div>
+<dl>
+<dt>Sample Name</dt><dd>HG_2026_001</dd>
+<dt>Reported Plant Sex</dt><dd><a class="SearchLink" href="/strains?sex=Female"> Female <svg></svg></a></dd>
+<dt>Report Type</dt><dd><a class="SearchLink" href="/strains?report=WGS"> Whole-Genome Sequencing <svg></svg></a></dd>
+<dt>Plant Type</dt><dd><a class="SearchLink" href="/strains?type=II"> Type II <svg></svg></a></dd>
+<dt>Accession Date</dt><dd>January 15, 2026</dd>
+</dl>
+<figcaption>Heterozygosity: <strong>2.34%</strong></figcaption>
+<figcaption>Y-Ratio Distribution: <strong>0.0145</strong></figcaption>
+<figcaption class="DataPlot--caption">Rarity: <strong><a class="SearchLink" href="/strains?rarity=common"> Common <svg></svg></a></strong></figcaption>
+<a href="https://mgcdata.s3.amazonaws.com/SS2/vcf-snpeff-variants/RSP99999.vcf.gz">VCF</a>
+<a href="https://mgcdata.s3.amazonaws.com/SS2/vcf-snpeff-variants/RSP99999.vcf.gz.tbi">VCF index</a>
+<a href="https://mgcdata.s3.amazonaws.com/SS2/vcf_JL/RSP99999_blockchain.vcf.gz">Blockchain VCF</a>
+<a href="https://mgcdata.s3.amazonaws.com/SS2/runs/20260101/RSP99999_R1_001.fastq.gz">R1</a>
+<a href="https://mgcdata.s3.amazonaws.com/SS2/runs/20260101/RSP99999_R2_001.fastq.gz">R2</a>
+<a href="https://mgcdata.s3.amazonaws.com/SS2/bams/public/RSP99999.bam">BAM</a>
+<a href="/strains/rsp10001">Related</a>
+<a href="/strains/rsp10002">Related</a>
+THCAS variant: missense
+CBDAS variant: silent
+ELF3 splice variant: high_impact
+</body></html>
+"""
+
+
+def _kannapedia_factory(handler):
+    """Build a factory that returns clients pointed at the Kannapedia base URL."""
+
+    def factory():
+        return httpx.Client(
+            base_url=server.KANNAPEDIA_BASE_URL,
+            transport=httpx.MockTransport(handler),
+            timeout=5,
+            follow_redirects=True,
+        )
+
+    return factory
+
+
+def test_kannapedia_strain_parses_basic_fields(monkeypatch):
+    monkeypatch.setattr(
+        server, "_kannapedia_client",
+        lambda: _kannapedia_factory(lambda req: httpx.Response(200, text=_KANNAPEDIA_SAMPLE_HTML))(),
+    )
+    out = server.lookup_kannapedia_strain(rsp_id="99999")
+    assert out["rsp_id"] == "rsp99999"
+    assert out["strain_name"] == "Mystery Skunk x Wedding Cake"
+    assert out["plant_type_chemotype"] == "Type II"
+    assert out["plant_sex"] == "Female"
+    assert out["grower"] == "Heritage Genetics"
+    assert out["rarity_classification"] == "Common"
+    assert out["heterozygosity"] == "2.34%"
+    assert out["y_ratio_distribution"] == "0.0145"
+    assert out["sample_name"] == "HG_2026_001"
+    assert out["accession_date"] == "January 15, 2026"
+
+
+def test_kannapedia_strain_extracts_files(monkeypatch):
+    monkeypatch.setattr(
+        server, "_kannapedia_client",
+        lambda: _kannapedia_factory(lambda req: httpx.Response(200, text=_KANNAPEDIA_SAMPLE_HTML))(),
+    )
+    out = server.lookup_kannapedia_strain(rsp_id="99999")
+    assert len(out["data_files"]["annotated_vcf"]) == 1
+    assert "RSP99999.vcf.gz" in out["data_files"]["annotated_vcf"][0]
+    assert len(out["data_files"]["fastq_reads"]) == 2
+    assert len(out["data_files"]["bam_alignment"]) == 1
+    assert len(out["data_files"]["blockchain_vcf"]) == 1
+
+
+def test_kannapedia_strain_extracts_related(monkeypatch):
+    monkeypatch.setattr(
+        server, "_kannapedia_client",
+        lambda: _kannapedia_factory(lambda req: httpx.Response(200, text=_KANNAPEDIA_SAMPLE_HTML))(),
+    )
+    out = server.lookup_kannapedia_strain(rsp_id="99999")
+    assert out["related_strain_count"] == 2
+    assert "rsp10001" in out["related_strains"]
+
+
+def test_kannapedia_strain_detects_canonical_genes(monkeypatch):
+    monkeypatch.setattr(
+        server, "_kannapedia_client",
+        lambda: _kannapedia_factory(lambda req: httpx.Response(200, text=_KANNAPEDIA_SAMPLE_HTML))(),
+    )
+    out = server.lookup_kannapedia_strain(rsp_id="99999")
+    assert "THCAS" in out["cannabis_genes_mentioned_on_page"]
+    assert "CBDAS" in out["cannabis_genes_mentioned_on_page"]
+    assert "ELF3" in out["cannabis_genes_mentioned_on_page"]
+
+
+def test_kannapedia_strain_accepts_both_id_formats(monkeypatch):
+    """Both '13536' and 'rsp13536' should work."""
+    monkeypatch.setattr(
+        server, "_kannapedia_client",
+        lambda: _kannapedia_factory(lambda req: httpx.Response(200, text=_KANNAPEDIA_SAMPLE_HTML))(),
+    )
+    a = server.lookup_kannapedia_strain(rsp_id="99999")
+    b = server.lookup_kannapedia_strain(rsp_id="rsp99999")
+    c = server.lookup_kannapedia_strain(rsp_id="RSP99999")
+    assert a["rsp_id"] == b["rsp_id"] == c["rsp_id"] == "rsp99999"
+
+
+def test_kannapedia_strain_rejects_bad_input():
+    out = server.lookup_kannapedia_strain(rsp_id="not-a-number")
+    assert "error" in out
+
+
+def test_kannapedia_strain_404(monkeypatch):
+    monkeypatch.setattr(
+        server, "_kannapedia_client",
+        lambda: _kannapedia_factory(lambda req: httpx.Response(404, text="not found"))(),
+    )
+    out = server.lookup_kannapedia_strain(rsp_id="99999")
+    assert out["error"] == "Strain not found"
+    assert "kannapedia.net" in out["url"]
+
+
+def test_cannabis_strain_search_urls_constructs():
+    out = server.cannabis_strain_search_urls(query="Northern Lights")
+    assert "kannapedia" in out["search_urls"]
+    assert "Northern+Lights" in out["search_urls"]["kannapedia"]
+    assert "leafly" in out["search_urls"]
+    assert "europepmc" in out["search_urls"]
+
+
+def test_cannabis_strain_search_empty():
+    out = server.cannabis_strain_search_urls(query="")
+    assert "error" in out
+
+
+# ---------------------------------------------------------------------------
+# NAM founder lines
+# ---------------------------------------------------------------------------
+
+
+def test_nam_founders_full_list():
+    out = server.list_maize_nam_founders()
+    # Sources disagree on the exact count (25 vs 26 vs 27 — McMullen 2009
+    # vs. Hufford 2021 vs. variations including/excluding B97 or CML333).
+    # Require at least the canonical core size.
+    assert out["founder_count"] >= 25
+    assert any(f["line"] == "B73" for f in out["founders"])
+    assert any(f["line"] == "Mo17" for f in out["founders"])
+    # Must include CIMMYT tropical lines (CC priority)
+    cml_lines = [f["line"] for f in out["founders"] if f["line"].startswith("CML")]
+    assert len(cml_lines) >= 8
+
+
+def test_nam_founders_filter_by_subpopulation():
+    out = server.list_maize_nam_founders(subpopulation="Sweet Corn")
+    assert all(f["subpopulation"] == "Sweet Corn" for f in out["founders"])
+    assert out["founder_count"] >= 2  # Il14H + P39
+
+
+def test_nam_founders_tropical_subpopulation_for_smallholder():
+    """Tropical/Subtropical lines are highlighted for CC's smallholder audience."""
+    out = server.list_maize_nam_founders(subpopulation="Tropical / Subtropical")
+    lines = {f["line"] for f in out["founders"]}
+    # CIMMYT CML lines + Thai Ki + IITA Tzi8 are the canonical smallholder-relevant
+    assert "Ki3" in lines or "Ki11" in lines
+    assert "Tzi8" in lines
+
+
+# ---------------------------------------------------------------------------
+# New atlas categories — sanity checks
+# ---------------------------------------------------------------------------
+
+
+def test_cannabis_atlas_categories_present():
+    expected = {
+        "cannabinoid_biosynthesis",
+        "cannabis_terpene_profile",
+        "cannabis_sex_and_photoperiod",
+        "cannabis_disease_resistance",
+        "hemp_compliance",
+    }
+    assert expected.issubset(set(server.TRAIT_ATLAS.keys()))
+
+
+def test_cannabinoid_biosynthesis_has_canonical_pathway():
+    genes = {g["symbol"] for g in server.TRAIT_ATLAS["cannabinoid_biosynthesis"]["genes"]}
+    # The full 7-enzyme pathway: CsAAE1 -> OLS -> OAC -> CsPT4 -> THCAS/CBDAS/CBCAS
+    assert {"THCAS", "CBDAS", "CBCAS", "OAC", "CsPT4", "CsAAE1", "OLS"}.issubset(genes)
+
+
+def test_cannabis_terpene_profile_has_chemotype_synthases():
+    genes = {g["symbol"] for g in server.TRAIT_ATLAS["cannabis_terpene_profile"]["genes"]}
+    # The major CsTPS family — myrcene + caryophyllene + terpinolene at minimum
+    assert "CsTPS1" in genes
+    assert "CsTPS9" in genes
+    assert "CsTPS18" in genes
+
+
+def test_maize_categories_present():
+    expected = {"maize_quality_protein", "maize_disease_resistance", "maize_pest_resistance"}
+    assert expected.issubset(set(server.TRAIT_ATLAS.keys()))
+
+
+def test_maize_quality_protein_includes_opaque2():
+    genes = {g["symbol"] for g in server.TRAIT_ATLAS["maize_quality_protein"]["genes"]}
+    assert "Opaque-2" in genes
+
+
+def test_cannabis_fallback_points_at_kannapedia_tools():
+    """The cannabis fallback should mention the new MCP tools, not just URLs."""
+    info = server.COMMUNITY_RESOURCES["cannabis_sativa"]
+    text = " ".join(info["alternatives"])
+    assert "lookup_kannapedia_strain" in text
+    assert "cannabinoid_biosynthesis" in text
+    assert "hemp_compliance" in text
+
+
+def test_atlas_grew_with_new_categories():
+    """The atlas should now have >= 25 categories (was 21 before this round)."""
+    assert len(server.TRAIT_ATLAS) >= 25
+
+
 def test_primary_ref_present_on_canonical_genes():
     """The well-characterized canonical genes should carry a primary_ref."""
     atlas = server.TRAIT_ATLAS

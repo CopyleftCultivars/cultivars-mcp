@@ -34,10 +34,21 @@ does not replace them.
 import concurrent.futures
 import json
 import pathlib
+import re
 import time
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+
+# Medicinal Genomics Kannapedia — public cannabis strain database
+# (https://www.kannapedia.net/). Strain pages live at the canonical URL
+# pattern below. They expose per-strain plant sex, plant type (chemotype),
+# Y-ratio (Y-chromosome marker abundance, a sex-purity check), heterozygosity,
+# and gene-level variant calls on canonical cannabinoid synthase genes plus
+# strain-of-interest loci (ELF3, FAD2, PHL-2, PKSG, etc.). Files (VCF, BAM,
+# FASTQ) are hosted on S3; the strain page links to them.
+KANNAPEDIA_BASE_URL = "https://www.kannapedia.net"
+KANNAPEDIA_STRAIN_URL_PATTERN = KANNAPEDIA_BASE_URL + "/strains/rsp{rsp_id}"
 
 # Veracity backbone: an evidence map keyed by Ensembl stable ID, populated
 # from `evals/atlas_audit.py` against live Ensembl xrefs. Records the
@@ -84,20 +95,27 @@ DEFAULT_SPECIES = "arabidopsis_thaliana"
 COMMUNITY_RESOURCES = {
     "cannabis_sativa": {
         "common_name": "Cannabis",
-        "reason": "Cannabis sativa is not in Ensembl Plants (federal-research-funding constraints have historically kept Cannabis out of public plant-genomics infrastructure).",
+        "reason": "Cannabis sativa is not in Ensembl Plants (federal-research-funding constraints have historically kept Cannabis out of public plant-genomics infrastructure). Cultivars MCP provides domain-specific tooling instead.",
         "alternatives": [
-            "NCBI Genome: https://www.ncbi.nlm.nih.gov/genome/?term=cannabis+sativa",
+            "lookup_kannapedia_strain(rsp_id=...) — live fetch from Medicinal Genomics Kannapedia for strain chemotype, sex, Y-ratio, heterozygosity, variant calls on canonical cannabis genes (THCAS/CBDAS/CBCAS/ELF3/FAD2/PHL/PKSG), and S3-hosted VCF/FASTQ/BAM links.",
+            "cannabis_strain_search_urls(query='...') — search-URL constructors for Kannapedia, Leafly, SeedFinder, NCBI Taxonomy, EuropePMC.",
+            "find_trait_genes(trait='cannabinoid_biosynthesis') — the 7-enzyme cannabinoid pathway (CsAAE1 → OLS → OAC → CsPT4 → THCAS/CBDAS/CBCAS) with PubMed citations + UniProt search URLs.",
+            "find_trait_genes(trait='cannabis_terpene_profile') — chemotype-defining CsTPS family (myrcene, β-caryophyllene, terpinolene, linalool, α-pinene synthases) from Booth et al. 2017.",
+            "find_trait_genes(trait='hemp_compliance') — BT/BD allele system at the THCAS/CBDAS locus, the genetic basis of <0.3% THC hemp compliance.",
+            "find_trait_genes(trait='cannabis_sex_and_photoperiod') — MADC2 sex marker, autoflower (Cannabis ruderalis day-neutral) locus, CsELF3.",
+            "find_trait_genes(trait='cannabis_disease_resistance') — powdery mildew QTL, MLO orthologs, Cannabis PR1.",
+            "CS10 reference genome (Grassa et al. 2021 Plant J): NCBI GCF_900626175.2 — https://www.ncbi.nlm.nih.gov/datasets/genome/GCF_900626175.2/",
             "Cannabis Genome DB (community): https://www.cannabisgenome.org/",
-            "CS10 reference (Grassa et al. 2021): NCBI GCF_900626175.2",
+            "Medicinal Genomics Kannapedia: https://www.kannapedia.net/ (community strain database)",
             "JGI Phytozome has draft Cannabis sativa assemblies (login required).",
         ],
     },
     "cannabis": {
         "common_name": "Cannabis",
-        "reason": "Cannabis sativa is not in Ensembl Plants. Use the Ensembl name 'cannabis_sativa' if Ensembl ever adds it; for now see alternatives.",
+        "reason": "Cannabis sativa is not in Ensembl Plants. Use species='cannabis_sativa' to get the full fallback with Kannapedia + chemotype-atlas pointers.",
         "alternatives": [
-            "NCBI Genome: https://www.ncbi.nlm.nih.gov/genome/?term=cannabis+sativa",
-            "Cannabis Genome DB (community): https://www.cannabisgenome.org/",
+            "See species='cannabis_sativa' for full alternatives table.",
+            "lookup_kannapedia_strain(rsp_id=...) for live strain data.",
         ],
     },
     "psilocybe_cubensis": {
@@ -170,10 +188,24 @@ mcp = FastMCP(
         "chain: UniProt/SWISSPROT curation tier (manually curated vs. "
         "auto-annotated), GO term count, Plant Reactome pathway "
         "memberships, PDB structures, TAIR/RAP-DB/MaizeGDB authoritative "
-        "cross-refs, BioGRID/STRING interaction databases. The "
-        "evidence_tier field grades each gene's annotation depth. Call "
-        "this whenever you need to verify an atlas claim or assess "
-        "annotation confidence before reasoning from a gene's function.\n\n"
+        "cross-refs, BioGRID/STRING interaction databases.\n"
+        "13. lookup_kannapedia_strain — LIVE fetch from Medicinal "
+        "Genomics Kannapedia (https://www.kannapedia.net/) for a Cannabis "
+        "strain by RSP ID. Returns chemotype (Plant Type I/II/III), plant "
+        "sex, Y-ratio, heterozygosity, rarity, grower attribution, "
+        "cannabis genes flagged on the page, and S3-hosted VCF/FASTQ/BAM "
+        "URLs for download. The ONLY tool here that targets Cannabis "
+        "directly (Cannabis isn't in Ensembl Plants).\n"
+        "14. cannabis_strain_search_urls — search-URL constructors for "
+        "Kannapedia, Leafly, SeedFinder, NCBI Taxonomy, EuropePMC. Use "
+        "this when the user names a cannabis strain by COMMON name "
+        "rather than RSP ID — hand them search links to find the IDs.\n"
+        "15. list_maize_nam_founders — the 26 maize NAM founder lines "
+        "(McMullen 2009 + Hufford 2021 NAM founder genomes). For corn "
+        "growers reasoning about heritage maize diversity beyond elite "
+        "dent lines: Stiff Stalk (B73/B97), Non-Stiff Stalk (Mo17/Oh43), "
+        "Tropical/Subtropical (CIMMYT CML lines, Thai Ki3/Ki11), "
+        "Popcorn (Hp301), Sweet Corn (Il14H/P39).\n\n"
         "Veracity note: find_trait_genes results include an 'evidence' "
         "field per gene with the UniProt curation tier (cached from a "
         "live audit). 'high_curated' = manually curated UniProt entry "
@@ -420,6 +452,95 @@ TRAIT_ATLAS = {
             {"symbol": "BADH2", "alias": "fgr / Fragrant / Os2AP", "ensembl_id": "Os08g0424500", "characterized_in": "oryza_sativa", "function": "Betaine aldehyde dehydrogenase 2; loss-of-function in basmati and jasmine landraces causes 2-acetyl-1-pyrroline accumulation (the popcorn-like fragrance).", "primary_ref": "Bradbury et al. 2005 Plant Biotechnol J 3:363 (PMID 17173626) — fgr/BADH2 cloning; 8-bp deletion accounts for fragrance in basmati and jasmine rices.", "evidence_level": "knockout_phenotype"},
             {"symbol": "GBSSII", "characterized_in": "oryza_sativa", "function": "Soluble starch synthase; controls intermediate amylose levels.", "note": "Literature handle — GBSSII is the soluble paralog of Wx/GBSSI; not directly resolvable by symbol."},
             {"symbol": "GLU-A1", "characterized_in": "triticum_aestivum", "function": "Glutenin subunit — major bread-making quality determinant in wheat.", "note": "Literature handle — high-molecular-weight glutenin loci on wheat 1A; not directly resolvable by symbol."},
+        ],
+    },
+    "cannabinoid_biosynthesis": {
+        "description": "Cannabis cannabinoid (CBGA → THCA / CBDA / CBCA) biosynthesis pathway. The seven enzymes building cannabinoids from hexanoate + geranylpyrophosphate.",
+        "natural_farming_relevance": "Central to Copyleft Cultivars's cannabis roots. Type I (THC-dominant) vs. Type II (balanced) vs. Type III (CBD-dominant / hemp) chemotypes are governed by the THCAS / CBDAS locus on cannabis chromosome 6 (BT/BD allele system, de Meijer 2003 Genetics 163:335). The full pathway must be understood to reason about heritage cultivars, hemp compliance, and breeder selection.",
+        "ensembl_caveat": "Cannabis sativa is NOT in Ensembl Plants. All entries here are literature handles with citations + UniProt search URLs. Use NCBI Gene + the CS10 reference (Grassa et al. 2021, GCF_900626175.2) for stable IDs.",
+        "genes": [
+            {"symbol": "CsAAE1", "alias": "acyl-activating enzyme 1", "characterized_in": "cannabis_sativa", "function": "Hexanoyl-CoA synthase — produces the activated short-chain fatty-acid precursor that feeds into the olivetol-synthase polyketide pathway. The entry point for cannabinoid biosynthesis from the hexanoate substrate pool.", "primary_ref": "Stout et al. 2012 Plant J 71:353 (PMID 22591452) — CsAAE1 cloning and biochemical characterization.", "evidence_level": "biochemical_activity", "uniprot_search_url": "https://www.uniprot.org/uniprotkb?query=CsAAE1+cannabis", "ncbi_search_url": "https://www.ncbi.nlm.nih.gov/gene/?term=CsAAE1+cannabis+sativa", "note": "Cannabis literature handle — not in Ensembl Plants."},
+            {"symbol": "OLS", "alias": "olivetol synthase / TKS / tetraketide synthase", "characterized_in": "cannabis_sativa", "function": "Type III polyketide synthase forming the resorcinolic aromatic ring of cannabinoid scaffolds from malonyl-CoA + hexanoyl-CoA. Produces olivetol and a pentyl tetraketide intermediate; the latter is the substrate for OAC.", "primary_ref": "Taura et al. 2009 FEBS Lett 583:2061 (PMID 19454282) — OLS biochemistry.", "evidence_level": "biochemical_activity", "uniprot_search_url": "https://www.uniprot.org/uniprotkb?query=olivetol+synthase+cannabis", "note": "Cannabis literature handle."},
+            {"symbol": "OAC", "alias": "olivetolic acid cyclase", "characterized_in": "cannabis_sativa", "function": "Polyketide cyclase converting the TKS/OLS pentyl tetraketide intermediate into olivetolic acid — the bicyclic precursor that feeds into the prenylation step.", "primary_ref": "Gagne et al. 2012 PNAS 109:12811 (PMID 22802619) — OAC discovery as the missing cyclase.", "evidence_level": "biochemical_activity", "uniprot_id_hint": "I6WU39 (TrEMBL)", "uniprot_search_url": "https://www.uniprot.org/uniprotkb?query=olivetolic+acid+cyclase+cannabis", "note": "Cannabis literature handle."},
+            {"symbol": "CsPT4", "alias": "prenyltransferase 4 / GOT", "characterized_in": "cannabis_sativa", "function": "Aromatic prenyltransferase — transfers geranylpyrophosphate (GPP) onto olivetolic acid to form CBGA (cannabigerolic acid), the universal cannabinoid precursor. Branchpoint of the pathway.", "primary_ref": "Luo et al. 2019 Nature 567:123 (PMID 30814733) — CsPT4 identification + heterologous CBGA production.", "evidence_level": "biochemical_activity", "uniprot_search_url": "https://www.uniprot.org/uniprotkb?query=CsPT4+cannabis", "note": "Cannabis literature handle — found at the cannabinoid biosynthesis cluster."},
+            {"symbol": "THCAS", "alias": "tetrahydrocannabinolic acid synthase", "characterized_in": "cannabis_sativa", "function": "Flavin-dependent oxidocyclase converting CBGA → THCA. The Type-I-chemotype-defining enzyme. BT allele (functional) drives high-THC drug-type cannabis; recessive bt allele is associated with hemp-type Type III plants.", "primary_ref": "Sirikantaramas et al. 2004 J Biol Chem 279:39767 + Sirikantaramas et al. 2004 Plant Cell Physiol 45:1607 (PMID 15448381) — THCAS cloning + crystal structure.", "evidence_level": "biochemical_activity", "uniprot_id_hint": "Q8GTB6 (SWISSPROT — canonical THCAS entry)", "uniprot_search_url": "https://www.uniprot.org/uniprotkb?query=THCAS+OR+Q8GTB6", "note": "Cannabis literature handle — UniProt Q8GTB6 is the manually curated canonical entry; not in Ensembl Plants because Cannabis is not."},
+            {"symbol": "CBDAS", "alias": "cannabidiolic acid synthase", "characterized_in": "cannabis_sativa", "function": "Homolog of THCAS at the same chromosomal locus. Catalyzes CBGA → CBDA. Type III hemp chemotypes have a functional CBDAS allele (BD) and a pseudogenized THCAS, producing predominantly CBD with <0.3% THC (the US hemp legal threshold).", "primary_ref": "Taura et al. 2007 FEBS Lett 581:2929 (PMID 17544411) — CBDAS biochemical characterization.", "evidence_level": "biochemical_activity", "uniprot_id_hint": "A6P6V9 (canonical CBDAS entry)", "uniprot_search_url": "https://www.uniprot.org/uniprotkb?query=CBDAS+OR+A6P6V9", "note": "Cannabis literature handle. The THCAS/CBDAS expression ratio at the BT/BD locus is the primary determinant of hemp-vs-drug-type compliance — Weiblen et al. 2015 New Phytol 208:1241."},
+            {"symbol": "CBCAS", "alias": "cannabichromenic acid synthase", "characterized_in": "cannabis_sativa", "function": "Third member of the THCAS/CBDAS/CBCAS gene family at the cannabinoid locus. Catalyzes CBGA → CBCA. Less commercially exploited than THCAS and CBDAS but present in many cultivars; secondary chemotype contributor.", "primary_ref": "Laverty et al. 2019 Genome Res 29:146 (PMID 30409774) — full reference genome describing the cannabinoid synthase cluster organization on chromosome 6.", "evidence_level": "biochemical_activity", "uniprot_search_url": "https://www.uniprot.org/uniprotkb?query=CBCAS+cannabis", "note": "Cannabis literature handle."},
+        ],
+    },
+    "cannabis_terpene_profile": {
+        "description": "Cannabis terpene synthase (CsTPS) family — the chemotype-defining aromatic/flavor terpenes that distinguish 'gas', 'haze', 'fruit', and 'pine' lineages.",
+        "natural_farming_relevance": "Heritage cannabis cultivar identity is more strongly determined by terpene profile than by THC/CBD ratio. Major CsTPS genes are well-characterized via the Booth et al. 2017 and Booth & Bohlmann 2019 work.",
+        "ensembl_caveat": "Cannabis sativa is NOT in Ensembl Plants — all literature handles.",
+        "genes": [
+            {"symbol": "CsTPS1", "alias": "β-myrcene synthase / CsTPS6", "characterized_in": "cannabis_sativa", "function": "Monoterpene synthase producing β-myrcene — the most abundant terpene in many cannabis cultivars; contributes to the 'earthy / musky' profile and the 'couch-lock' sedative reputation attached to indica-leaning strains.", "primary_ref": "Booth et al. 2017 PLOS ONE 12:e0173911 (PMID 28355238) — biochemical characterization of CsTPS family.", "evidence_level": "biochemical_activity", "uniprot_search_url": "https://www.uniprot.org/uniprotkb?query=myrcene+synthase+cannabis", "note": "Cannabis literature handle. Booth et al. characterized the major CsTPS members."},
+            {"symbol": "CsTPS9", "alias": "(E)-β-caryophyllene synthase", "characterized_in": "cannabis_sativa", "function": "Sesquiterpene synthase producing (E)-β-caryophyllene — the dominant 'spicy / peppery' note in many cultivars and a known CB2-receptor selective agonist (dietary cannabinoid).", "primary_ref": "Booth et al. 2017 PLOS ONE 12:e0173911 (PMID 28355238).", "evidence_level": "biochemical_activity", "uniprot_search_url": "https://www.uniprot.org/uniprotkb?query=caryophyllene+synthase+cannabis", "note": "Cannabis literature handle."},
+            {"symbol": "CsTPS18", "alias": "terpinolene synthase", "characterized_in": "cannabis_sativa", "function": "Monoterpene synthase producing terpinolene — the dominant terpene in classic Haze lineages and many 'sativa-leaning' chemotypes.", "primary_ref": "Booth et al. 2017 PLOS ONE 12:e0173911 (PMID 28355238).", "evidence_level": "biochemical_activity", "uniprot_search_url": "https://www.uniprot.org/uniprotkb?query=terpinolene+synthase+cannabis", "note": "Cannabis literature handle."},
+            {"symbol": "CsTPS3", "alias": "linalool synthase", "characterized_in": "cannabis_sativa", "function": "Monoterpene synthase producing linalool — floral / lavender note, common in many indica and indica-leaning hybrids.", "primary_ref": "Booth et al. 2017 PLOS ONE 12:e0173911 (PMID 28355238).", "evidence_level": "biochemical_activity", "uniprot_search_url": "https://www.uniprot.org/uniprotkb?query=linalool+synthase+cannabis", "note": "Cannabis literature handle."},
+            {"symbol": "CsTPS19", "alias": "α-pinene synthase", "characterized_in": "cannabis_sativa", "function": "Monoterpene synthase producing α-pinene — 'pine / forest' note; common in cultivars like Jack Herer and many OG-Kush descendants.", "primary_ref": "Booth et al. 2017 PLOS ONE 12:e0173911 (PMID 28355238).", "evidence_level": "biochemical_activity", "uniprot_search_url": "https://www.uniprot.org/uniprotkb?query=pinene+synthase+cannabis", "note": "Cannabis literature handle."},
+        ],
+    },
+    "cannabis_sex_and_photoperiod": {
+        "description": "Genes controlling sex determination (XY system unique among cultivated dioecious crops) and photoperiodic / day-neutral (autoflower) transition in Cannabis.",
+        "natural_farming_relevance": "Cannabis is the only major drug/fiber crop in commerce that is dioecious — male/female determination is genetically controlled and matters operationally (males flower and pollinate; growers cull). Autoflower (day-neutral) cultivars trace to Cannabis ruderalis introgression and have a recessive allele in flowering-time machinery; critical for outdoor smallholder cultivation at high latitudes.",
+        "ensembl_caveat": "Cannabis sativa is NOT in Ensembl Plants — literature handles.",
+        "genes": [
+            {"symbol": "MADC2", "alias": "male-associated DNA marker 2", "characterized_in": "cannabis_sativa", "function": "Male-chromosome-linked DNA marker — among the earliest and most reliable PCR-based sex identification markers in Cannabis. Used by tissue-culture and seedling sexing protocols. Sequence-tagged to the Y chromosome.", "primary_ref": "Mandolino et al. 1999 Theor Appl Genet 98:86 — male-associated SCAR markers in hemp.", "evidence_level": "qtl_mapped", "note": "Cannabis literature handle. Kannapedia reports Y-ratio per sample which leverages markers in this region."},
+            {"symbol": "CsAuto", "alias": "autoflower locus / Cannabis ruderalis day-neutral", "characterized_in": "cannabis_sativa", "function": "Recessive locus underlying day-neutral autoflowering. Plants flower based on age rather than photoperiod. Originally from Cannabis ruderalis populations of Eastern Europe and Central Asia. Underlying gene mapping is incomplete; candidate-gene literature points at PEBP-family (FT-like) and CsELF3 variants.", "primary_ref": "Sawler et al. 2015 PLOS ONE 10:e0133292 (PMID 26218849) — initial cannabis population genomics. Onofri et al. 2015 Plant Methods 11:24 — characterization of autoflower cultivars.", "evidence_level": "qtl_mapped", "note": "Cannabis literature handle. Active research area; complete causal allele not yet pinpointed in published peer-reviewed work."},
+            {"symbol": "CsELF3", "alias": "early-flowering 3", "characterized_in": "cannabis_sativa", "function": "Ortholog of Arabidopsis ELF3 circadian-clock evening-complex component. Splice variants in CsELF3 have been associated with shifted photoperiod sensitivity in Cannabis — candidate contributor to autoflower. Highlighted as variant of interest in Kannapedia strain reports.", "primary_ref": "Hill et al. 2017 PLOS ONE 12:e0179832 (PMID 28658308) — CsELF3 characterization.", "evidence_level": "biochemical_activity", "note": "Cannabis literature handle. Kannapedia flags ELF3 splice variants as 'high-impact' in many strain reports."},
+        ],
+    },
+    "cannabis_disease_resistance": {
+        "description": "Pathogen resistance loci in Cannabis — powdery mildew, gray mold (Botrytis), Fusarium, Pythium. Largely emergent area; QTL-mapped not always cloned.",
+        "natural_farming_relevance": "Cannabis is high-value, high-disease-pressure crop, especially under indoor/dense outdoor production. Heritage landraces from arid origins (Afghan, Hindu Kush, Moroccan) often carry resistance alleles selected over centuries against local pathogens. Critical for organic / KNF / no-synthetic-fungicide growers.",
+        "ensembl_caveat": "Cannabis sativa is NOT in Ensembl Plants — literature handles.",
+        "genes": [
+            {"symbol": "PMR_loci", "alias": "powdery mildew resistance / Golovinomyces ambrosiae R-genes", "characterized_in": "cannabis_sativa", "function": "Quantitative powdery mildew resistance loci. Mapping populations from resistant landrace × susceptible elite crosses (e.g. Pepper et al. work) identify several major-effect QTL but causal genes are still being cloned (2024-2026).", "primary_ref": "Pepper et al. 2023 Plant Disease — powdery mildew QTL mapping in cannabis. Multiple academic groups (UBC, NC State, UMass) actively working.", "evidence_level": "qtl_mapped", "note": "Cannabis literature handle. Active research."},
+            {"symbol": "MLO_orthologs", "alias": "mildew resistance locus O homologs", "characterized_in": "cannabis_sativa", "function": "Cannabis homologs of the canonical MLO susceptibility gene family. In barley, wheat, tomato, cucumber, pea, etc., MLO loss-of-function produces broad-spectrum powdery mildew resistance. Candidate for translation into Cannabis via gene-edited or naturally-occurring loss-of-function alleles.", "primary_ref": "Koh et al. 2018 PLOS ONE 13:e0207468 (PMID 30431893) — initial MLO family characterization in cannabis genome.", "evidence_level": "sequence_similarity_only", "note": "Cannabis literature handle — promising translational target; loss-of-function alleles not yet characterized in commercial cultivars."},
+            {"symbol": "PR1", "alias": "pathogenesis-related protein 1", "characterized_in": "cannabis_sativa", "function": "Salicylic-acid-pathway defense marker. Cannabis PR1 ortholog characterized in jasmonate / SA crosstalk studies of cannabis defense response.", "primary_ref": "Conneely et al. 2022 J Cannabis Res 4:1 — cannabis pathogen-response gene expression characterization.", "evidence_level": "sequence_similarity_only", "note": "Cannabis literature handle."},
+        ],
+    },
+    "general_lepidopteran_pest_resistance": {
+        "description": "Plant-side defenses against lepidopteran herbivores (caterpillars, armyworms, earworms, budworms) across crops — terpene + glucosinolate emission, protease inhibitors, cysteine proteases (Mir1-CP family).",
+        "natural_farming_relevance": "Fall armyworm (Spodoptera frugiperda) invaded Africa from the Americas around 2016 and has spread into Asia, becoming a top smallholder-cereal threat. Native resistance alleles + push-pull intercropping + Bt-free management are the natural-farming responses. Spans maize, sorghum, rice, cannabis (budworm), tomato (tomato hornworm).",
+        "genes": [
+            {"symbol": "Mir1", "alias": "Mir1-CP", "characterized_in": "zea_mays", "function": "Maize cysteine protease accumulated in the whorl that disrupts lepidopteran peritrophic matrix. Effective against fall armyworm, southwestern corn borer, corn earworm.", "primary_ref": "Pechan et al. 2000 Plant Cell 12:1031 (PMID 10899972).", "evidence_level": "transgenic_complementation"},
+            {"symbol": "PI-II", "alias": "Proteinase inhibitor II", "characterized_in": "solanum_lycopersicum", "function": "Wound-induced trypsin/chymotrypsin inhibitor in Solanaceae — limits lepidopteran digestion of plant protein. Canonical jasmonate-pathway defense response output.", "primary_ref": "Pearce et al. 1991 Science 253:895 (PMID 17751816) — systemin/PI-II signaling characterization.", "evidence_level": "transgenic_complementation"},
+            {"symbol": "Mi-1.2", "characterized_in": "solanum_lycopersicum", "function": "NB-LRR R gene from Solanum peruvianum providing resistance to root-knot nematodes AND aphids AND whitefly. Rare example of a broad-spectrum invertebrate-resistance gene; central to commercial tomato disease management.", "primary_ref": "Rossi et al. 1998 PNAS 95:9750 (PMID 9707547) — Mi-1.2 cloning.", "evidence_level": "transgenic_complementation"},
+            {"symbol": "Cry-receptor_cadherin", "alias": "Bt-toxin receptor", "characterized_in": "zea_mays", "function": "Maize cadherin and aminopeptidase-N family genes that bind Bacillus thuringiensis (Bt) Cry toxins in the lepidopteran midgut. Mutations in these receptors are the dominant mechanism of Cry-toxin resistance evolution in pest populations — relevant to Bt-corn refuge strategy and resistance management.", "primary_ref": "Tabashnik et al. 2013 Nat Biotechnol 31:510 (PMID 23752438) — global review of Bt-resistance evolution.", "evidence_level": "qtl_mapped", "note": "Inverse perspective — these are the host-target genes, mutations in which confer pest *resistance* to Bt corn. Important context for non-Bt natural-farming systems."},
+        ],
+    },
+    "hemp_compliance": {
+        "description": "Genetic determinants of THC content for hemp-cultivar legal compliance (<0.3% Δ9-THC in dry flower under US 2018 Farm Bill).",
+        "natural_farming_relevance": "Hemp growers face strict THC thresholds. The BT/BD allelic system at the chromosome-6 cannabinoid-synthase locus determines whether a cultivar will trend Type III (CBD-dominant, hemp-compliant) or risk regulatory hot-test failure. Understanding the underlying genetics lets growers select compliant cultivars and breeders fix BD alleles in Type-III lines.",
+        "ensembl_caveat": "Cannabis sativa is NOT in Ensembl Plants — literature handles.",
+        "genes": [
+            {"symbol": "THCAS_pseudogene", "alias": "BT0 / bt", "characterized_in": "cannabis_sativa", "function": "Pseudogenized variant of THCAS at the BT locus — the recessive allele underlying Type III (CBD-dominant) hemp chemotypes. Loss-of-function THCAS combined with functional CBDAS produces hemp-compliant <0.3% Δ9-THC plants.", "primary_ref": "Weiblen et al. 2015 New Phytol 208:1241 (PMID 26242869) — genetic determinants of Type I/II/III chemotypes. de Meijer et al. 2003 Genetics 163:335 — original BT/BD allele system.", "evidence_level": "genetic_mapping", "note": "Cannabis literature handle. Hemp breeders fixing BD/BD homozygotes minimize THC-compliance risk."},
+            {"symbol": "CBDAS_functional", "alias": "BD", "characterized_in": "cannabis_sativa", "function": "Functional CBDAS allele at the chromosome-6 cannabinoid-synthase locus — dominant allele in hemp-type Type III plants.", "primary_ref": "Weiblen et al. 2015 New Phytol 208:1241 (PMID 26242869).", "evidence_level": "genetic_mapping", "note": "Cannabis literature handle."},
+        ],
+    },
+    "maize_quality_protein": {
+        "description": "Genes underlying improved nutritional protein quality in maize — primarily the opaque-2 / Quality Protein Maize (QPM) system.",
+        "natural_farming_relevance": "Quality Protein Maize varieties developed by CIMMYT (Vivek Villegas, Suriphand Vasal) deliver markedly improved lysine + tryptophan content over normal maize — critical for smallholder communities where maize is the staple protein source. Recognized by World Food Prize 2000.",
+        "genes": [
+            {"symbol": "Opaque-2", "alias": "o2 / O2", "characterized_in": "zea_mays", "function": "bZIP transcription factor regulating zein-storage-protein synthesis in maize endosperm. Loss-of-function o2 alleles reduce zein content, increasing free lysine + tryptophan in the kernel (QPM phenotype). Modified o2 backgrounds with vitreous endosperm modifiers (compensating for opaque-2's chalky-kernel side effect) are the basis of CIMMYT QPM varieties.", "primary_ref": "Schmidt et al. 1990 Science 250:266 (PMID 2218530) — Opaque-2 cloning. Vivek et al. 2008 J Plant Reg 2:107 — CIMMYT QPM-line development.", "evidence_level": "knockout_phenotype", "note": "Resolves in Ensembl Plants — should pull stable ID and UniProt curation via lookup_gene."},
+            {"symbol": "Floury-2", "alias": "fl2", "characterized_in": "zea_mays", "function": "α-zein storage protein gene; dominant fl2 mutations cause floury-endosperm phenotype with altered amino-acid composition. Used in combination with o2 in some QPM breeding programs.", "primary_ref": "Coleman et al. 1995 PNAS 92:6828 (PMID 7624331) — fl2 cloning.", "evidence_level": "biochemical_activity"},
+        ],
+    },
+    "maize_disease_resistance": {
+        "description": "Major qualitative-resistance loci against the dominant maize foliar and ear diseases — Northern leaf blight (Exserohilum turcicum), gray leaf spot (Cercospora zeae-maydis), fusarium ear rot.",
+        "natural_farming_relevance": "Heritage open-pollinated maize varieties carry diverse R-gene alleles selected by smallholder farmers over generations of natural disease pressure. Major-effect resistance loci (Ht1/Ht2/HtN, Rcg1) and quantitative tolerance both matter. Critical for low-input / organic / on-farm seed-saved production where fungicide is not used.",
+        "genes": [
+            {"symbol": "Ht1", "characterized_in": "zea_mays", "function": "Major-effect dominant resistance gene against Exserohilum turcicum (Northern leaf blight) — produces chlorotic lesions instead of necrotic ones; restricts conidiation. Mapped to chromosome 2; one of the foundational maize disease-resistance loci.", "primary_ref": "Welz & Geiger 2000 Plant Breeding 119:1 — review of Ht1/Ht2/HtN/Htm1 system.", "evidence_level": "qtl_mapped", "note": "Race-specific; widely deployed in breeding but susceptible to NLB race shifts."},
+            {"symbol": "Htn1", "alias": "HtN", "characterized_in": "zea_mays", "function": "Quantitative chlorotic-lesion-type resistance to Northern leaf blight; delays lesion development. Mapped to chromosome 8.", "primary_ref": "Hurni et al. 2015 PNAS 112:8780 (PMID 26124137) — Htn1 cloning; encodes a wall-associated kinase.", "evidence_level": "knockout_phenotype"},
+            {"symbol": "Rcg1", "characterized_in": "zea_mays", "function": "Major resistance gene against Colletotrichum graminicola (anthracnose stalk rot). Encodes a CC-NB-LRR R protein. Important for high-yield stalk-rot resistance.", "primary_ref": "Frey et al. 2011 Mol Plant Microbe Interact 24:1175 (PMID 21692637) — Rcg1 cloning.", "evidence_level": "transgenic_complementation"},
+        ],
+    },
+    "maize_pest_resistance": {
+        "description": "Genetic resistance to lepidopteran maize pests — especially fall armyworm (Spodoptera frugiperda) and corn earworm (Helicoverpa zea).",
+        "natural_farming_relevance": "Smallholder farmers in Africa, Latin America, and Asia face devastating fall-armyworm pressure (FAW invaded Africa from the Americas around 2016). Native resistance alleles, including the Mir1-CP cysteine protease, are a non-Bt, no-IP, biological-resistance strategy compatible with smallholder seed saving.",
+        "genes": [
+            {"symbol": "Mir1", "alias": "Mir1-CP", "characterized_in": "zea_mays", "function": "Maize insect-resistance 1 — a 33 kDa cysteine protease accumulated in the whorl that disrupts the peritrophic matrix of lepidopteran larvae. Discovered in tropical landraces; confers significant fall-armyworm and southwestern-corn-borer resistance.", "primary_ref": "Pechan et al. 2000 Plant Cell 12:1031 (PMID 10899972) — Mir1 / Mir1-CP discovery + function.", "evidence_level": "transgenic_complementation"},
         ],
     },
     "photosynthesis_c4": {
@@ -1151,6 +1272,313 @@ def get_sequence(
         "length": len(data.get("seq") or ""),
         "sequence": data.get("seq"),
         "description": data.get("desc"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Kannapedia integration — live cannabis strain data
+# ---------------------------------------------------------------------------
+
+
+def _kannapedia_client() -> httpx.Client:
+    """Separate client for Kannapedia — different base URL than Ensembl,
+    standard browser-like User-Agent because Kannapedia returns HTML not JSON."""
+    return httpx.Client(
+        base_url=KANNAPEDIA_BASE_URL,
+        headers={
+            "User-Agent": "cultivars-mcp/0.2 (Copyleft Cultivars; cannabis genomics research)",
+            "Accept": "text/html,application/xhtml+xml",
+        },
+        timeout=30,
+        follow_redirects=True,
+    )
+
+
+_KANNAPEDIA_S3_BASE = "https://mgcdata.s3.amazonaws.com"
+
+
+def _parse_kannapedia_strain_html(html: str, rsp_id: str) -> dict:
+    """Parse a Kannapedia strain page HTML into structured fields.
+
+    Robust to layout changes — every field is wrapped in try-except style.
+    Missing fields return None rather than failing.
+    """
+    def _first(pattern: str, flags: int = 0) -> str | None:
+        m = re.search(pattern, html, flags)
+        return m.group(1).strip() if m else None
+
+    def _all(pattern: str, flags: int = 0) -> list[str]:
+        return [m.group(1).strip() for m in re.finditer(pattern, html, flags)]
+
+    # Identity
+    strain_name = _first(r"<h1[^>]*>([^<]+)</h1>")
+    page_title = _first(r"<title>([^<]+)</title>")
+
+    # Dt/Dd-style attributes (Plant Type, Plant Sex, Report Type, Grower, etc.)
+    # Pattern: <dt>LABEL</dt> <dd> <a ...> VALUE <svg
+    attrs: dict[str, str] = {}
+    for m in re.finditer(
+        r"<dt>([^<]+)</dt>\s*<dd>\s*<a[^>]*>\s*([^<]+?)\s*<(?:svg|/a)",
+        html,
+        re.DOTALL,
+    ):
+        label = m.group(1).strip()
+        value = m.group(2).strip()
+        attrs[label] = value
+
+    # Sometimes dd has the value directly without a wrapping anchor:
+    for m in re.finditer(r"<dt>([^<]+)</dt>\s*<dd>\s*([^<]+?)\s*</dd>", html, re.DOTALL):
+        label = m.group(1).strip()
+        value = m.group(2).strip()
+        if label not in attrs and value and not value.startswith("<"):
+            attrs[label] = value
+
+    # Numeric figcaption fields (Het + Y-Ratio + others)
+    het = _first(r"Heterozygosity:\s*<strong>([^<]+)</strong>")
+    yratio = _first(r"Y-Ratio Distribution:\s*<strong>([^<]+)</strong>")
+    # Rarity is in a SearchLink anchor inside <strong>; pull the anchor text
+    rarity_pct = _first(
+        r"Rarity:\s*<strong>\s*<a[^>]*>\s*([^<]+?)\s*<(?:svg|/a)",
+        re.DOTALL,
+    )
+
+    # Grower is in a StrainInfo--registrant block, not a dt/dd
+    grower = _first(
+        r'StrainInfo--registrant"[^>]*>\s*Grower:\s*<a[^>]*>\s*([^<]+?)\s*<(?:svg|/a)',
+        re.DOTALL,
+    )
+
+    # S3-hosted data files
+    s3_links = set(re.findall(r'href="(https://mgcdata\.s3\.amazonaws\.com/[^"]+)"', html))
+    file_groups: dict[str, list[str]] = {
+        "annotated_vcf": [u for u in s3_links if "vcf-snpeff-variants" in u and u.endswith(".vcf.gz")],
+        "blockchain_vcf": [u for u in s3_links if "vcf_JL" in u and u.endswith(".vcf.gz")],
+        "vcf_index": [u for u in s3_links if u.endswith(".vcf.gz.tbi")],
+        "fastq_reads": sorted(u for u in s3_links if ".fastq.gz" in u),
+        "bam_alignment": sorted(u for u in s3_links if u.endswith(".bam")),
+        "bam_index": sorted(u for u in s3_links if u.endswith(".bam.bai")),
+    }
+
+    # Related strain pages
+    related_ids = sorted({
+        m.group(1)
+        for m in re.finditer(r'/strains/(rsp\d+)"', html)
+        if m.group(1).lower() != rsp_id.lower()
+    })
+
+    # Variant-of-interest mentions (look for known gene names in the HTML body)
+    cannabis_genes_of_interest = [
+        "THCAS", "CBDAS", "CBCAS", "OAC", "CsAAE1", "CsPT4", "OLS",
+        "ELF3", "FAD2", "FAD2-2", "PHL-2", "PHL", "EMF1", "EMF1-2",
+        "PKSG", "PKSG-4b", "MADC2",
+    ]
+    mentioned_genes = [g for g in cannabis_genes_of_interest if re.search(rf"\b{re.escape(g)}\b", html)]
+
+    return {
+        "rsp_id": rsp_id,
+        "url": KANNAPEDIA_STRAIN_URL_PATTERN.format(rsp_id=rsp_id.lower().lstrip("rsp")),
+        "strain_name": strain_name,
+        "page_title": page_title,
+        "attributes": attrs,
+        "plant_type_chemotype": attrs.get("Plant Type"),  # Type I/II/III
+        "plant_sex": attrs.get("Reported Plant Sex"),
+        "report_type": attrs.get("Report Type"),
+        "grower": grower or attrs.get("Grower"),
+        "rarity_classification": rarity_pct or attrs.get("Rarity"),  # 'Common' / 'Uncommon' / 'Rare'
+        "accession_date": attrs.get("Accession Date"),
+        "sample_name": attrs.get("Sample Name"),
+        "heterozygosity": het,
+        "y_ratio_distribution": yratio,
+        "rarity_pct": rarity_pct,
+        "cannabis_genes_mentioned_on_page": mentioned_genes,
+        "data_files": file_groups,
+        "related_strains": related_ids[:20],
+        "related_strain_count": len(related_ids),
+    }
+
+
+@mcp.tool()
+def lookup_kannapedia_strain(rsp_id: str) -> dict:
+    """Look up a Cannabis strain in Medicinal Genomics Kannapedia by its RSP ID.
+
+    Kannapedia (https://www.kannapedia.net/) is the canonical public
+    cannabis-strain database from Medicinal Genomics — built on
+    StrainStat sequencing data with blockchain-stamped records. Each
+    strain has an RSP ID (e.g. 'rsp13536', 'rsp13534') and a public
+    page showing chemotype (Plant Type I / II / III), plant sex, Y-ratio
+    (a Y-chromosome marker indicating sex-purity), heterozygosity,
+    cannabinoid-synthase coverage (THCAS / CBDAS / CBCAS), variants on
+    canonical cannabis genes (ELF3, FAD2, PHL, PKSG, etc.), file
+    downloads (VCF, FASTQ, BAM on S3), and phylogenetic relatives.
+
+    This tool fetches the strain page and parses out the structured
+    fields. NOT all Kannapedia data is fetched — the strain page is the
+    primary entry point; from there the agent can hand the user the
+    direct URLs to S3-hosted data files for offline analysis.
+
+    Args:
+        rsp_id: Kannapedia RSP identifier — either 'rsp13536' (lower
+                case) or '13536' (numeric only); both accepted.
+
+    Returns: structured strain metadata. Returns an error response with
+    the canonical URL if the strain page can't be reached.
+    """
+    rid = (rsp_id or "").strip().lower()
+    rid = rid[3:] if rid.startswith("rsp") else rid
+    if not rid.isdigit():
+        return {
+            "error": f"rsp_id must be numeric or rsp-prefixed numeric (got {rsp_id!r})",
+            "expected_format": "rsp13536 or 13536",
+        }
+
+    url = f"/strains/rsp{rid}"
+    with _kannapedia_client() as client:
+        try:
+            resp = client.get(url)
+        except httpx.HTTPError as e:
+            return {
+                "error": f"Kannapedia fetch failed: {e}",
+                "url": KANNAPEDIA_STRAIN_URL_PATTERN.format(rsp_id=rid),
+            }
+        if resp.status_code == 404:
+            return {
+                "error": "Strain not found",
+                "rsp_id": f"rsp{rid}",
+                "url": KANNAPEDIA_STRAIN_URL_PATTERN.format(rsp_id=rid),
+                "hint": "Verify the RSP ID — Kannapedia uses numeric IDs ranging from ~rsp1 to current. Browse https://www.kannapedia.net/strains to discover IDs.",
+            }
+        if resp.status_code >= 400:
+            return {
+                "error": f"Kannapedia returned HTTP {resp.status_code}",
+                "url": KANNAPEDIA_STRAIN_URL_PATTERN.format(rsp_id=rid),
+            }
+
+    parsed = _parse_kannapedia_strain_html(resp.text, f"rsp{rid}")
+    parsed["source"] = "Medicinal Genomics Kannapedia (https://www.kannapedia.net/)"
+    parsed["data_note"] = (
+        "Kannapedia data is from StrainStat WGS / amplicon sequencing of "
+        "registered cannabis cultivars. Blockchain-stamped records, "
+        "manually-curated grower attribution. Respect Medicinal Genomics's "
+        "terms of use; for bulk programmatic access contact them directly."
+    )
+    return parsed
+
+
+@mcp.tool()
+def cannabis_strain_search_urls(query: str) -> dict:
+    """Construct strain-lookup URLs for community cannabis databases.
+
+    Kannapedia does not currently expose a public structured search API
+    — this tool returns search URLs the agent can hand the user to
+    drill in. Covers Kannapedia (Medicinal Genomics), Leafly (community
+    strain profiles), SeedFinder (lineage / breeder records), and NCBI
+    Taxonomy (for any Cannabis sativa-related accessions in NCBI).
+
+    Args:
+        query: Strain name or part of a name, e.g. 'Northern Lights',
+               'OG Kush', 'ACDC'.
+
+    Returns: a dict of database -> search URL. No HTTP requests are made.
+    """
+    q = (query or "").strip()
+    if not q:
+        return {"error": "query is required"}
+
+    from urllib.parse import quote_plus
+
+    qs = quote_plus(q)
+    return {
+        "query": q,
+        "search_urls": {
+            "kannapedia": f"https://www.kannapedia.net/strains?search={qs}",
+            "kannapedia_phylotree": "https://www.kannapedia.net/cannabis-phylotree",
+            "leafly": f"https://www.leafly.com/search?q={qs}",
+            "seedfinder": f"https://en.seedfinder.eu/search/?q={qs}",
+            "ncbi_taxonomy": f"https://www.ncbi.nlm.nih.gov/taxonomy/?term={qs}+cannabis",
+            "europepmc": f"https://europepmc.org/search?query={qs}+cannabis",
+        },
+        "note": (
+            "Kannapedia search is browser-side; the link above lands you on "
+            "the search page. For programmatic strain lookup use "
+            "lookup_kannapedia_strain(rsp_id=...) once you have an RSP ID. "
+            "Leafly and SeedFinder are community resources — flavor / "
+            "lineage / grow notes but NO sequencing data."
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# NAM founder lines for maize breeders
+# ---------------------------------------------------------------------------
+
+_MAIZE_NAM_FOUNDERS = [
+    {"line": "B73", "subpopulation": "Stiff Stalk", "origin_notes": "The maize reference; B73 v5 is the Ensembl Plants assembly."},
+    {"line": "B97", "subpopulation": "Non-Stiff Stalk", "origin_notes": ""},
+    {"line": "CML103", "subpopulation": "Tropical / Subtropical", "origin_notes": "CIMMYT tropical inbred."},
+    {"line": "CML228", "subpopulation": "Tropical / Subtropical", "origin_notes": "CIMMYT — tolerance to highland conditions."},
+    {"line": "CML247", "subpopulation": "Tropical / Subtropical", "origin_notes": "CIMMYT subtropical."},
+    {"line": "CML277", "subpopulation": "Tropical / Subtropical", "origin_notes": "CIMMYT."},
+    {"line": "CML322", "subpopulation": "Tropical / Subtropical", "origin_notes": "CIMMYT — drought tolerance source."},
+    {"line": "CML333", "subpopulation": "Tropical / Subtropical", "origin_notes": "CIMMYT."},
+    {"line": "CML52", "subpopulation": "Tropical / Subtropical", "origin_notes": "CIMMYT."},
+    {"line": "CML69", "subpopulation": "Tropical / Subtropical", "origin_notes": "CIMMYT."},
+    {"line": "Hp301", "subpopulation": "Popcorn", "origin_notes": "Popcorn-type founder."},
+    {"line": "Il14H", "subpopulation": "Sweet Corn", "origin_notes": "Sweet-corn-type founder."},
+    {"line": "Ki11", "subpopulation": "Tropical / Subtropical", "origin_notes": "Thai-origin tropical inbred."},
+    {"line": "Ki3", "subpopulation": "Tropical / Subtropical", "origin_notes": "Thai-origin tropical inbred."},
+    {"line": "Ky21", "subpopulation": "Non-Stiff Stalk", "origin_notes": "Kentucky-derived."},
+    {"line": "M162W", "subpopulation": "Non-Stiff Stalk", "origin_notes": ""},
+    {"line": "M37W", "subpopulation": "Non-Stiff Stalk", "origin_notes": ""},
+    {"line": "Mo17", "subpopulation": "Non-Stiff Stalk", "origin_notes": "Classic Missouri-17 inbred; the B73 × Mo17 hybrid was a foundational dent-corn cross."},
+    {"line": "Mo18W", "subpopulation": "Non-Stiff Stalk", "origin_notes": ""},
+    {"line": "Ms71", "subpopulation": "Non-Stiff Stalk", "origin_notes": ""},
+    {"line": "NC350", "subpopulation": "Tropical / Subtropical", "origin_notes": "NC State tropical inbred."},
+    {"line": "NC358", "subpopulation": "Tropical / Subtropical", "origin_notes": "NC State tropical inbred."},
+    {"line": "Oh43", "subpopulation": "Non-Stiff Stalk", "origin_notes": "Ohio-43; widely used breeding founder."},
+    {"line": "Oh7B", "subpopulation": "Non-Stiff Stalk", "origin_notes": "Ohio-7B."},
+    {"line": "P39", "subpopulation": "Sweet Corn", "origin_notes": "Sweet-corn-type founder."},
+    {"line": "Tx303", "subpopulation": "Non-Stiff Stalk", "origin_notes": "Texas-303."},
+    {"line": "Tzi8", "subpopulation": "Tropical / Subtropical", "origin_notes": "Tropical / IITA-derived."},
+]
+
+
+@mcp.tool()
+def list_maize_nam_founders(subpopulation: str | None = None) -> dict:
+    """List the 26 maize NAM (Nested Association Mapping) founder lines.
+
+    The NAM panel (McMullen et al. 2009 Science 325:737, PMID 19661427)
+    is a community resource of 26 diverse maize inbreds × B73 crosses
+    used to capture the genetic diversity of cultivated maize for
+    breeding and QTL mapping. Each line now has its own reference-quality
+    genome assembly (Hufford et al. 2021 Science 373:655, PMID 34353948).
+    Subpopulations: Stiff Stalk (B73 + B97 lineage), Non-Stiff Stalk
+    (Mo17 lineage), Tropical/Subtropical (CIMMYT + IITA + Thai), Popcorn,
+    Sweet Corn. Relevant for corn growers reasoning about heritage maize
+    diversity beyond modern dent-corn elite lines.
+
+    Args:
+        subpopulation: Optional filter — 'Stiff Stalk', 'Non-Stiff Stalk',
+                       'Tropical / Subtropical', 'Popcorn', 'Sweet Corn'.
+    """
+    founders = _MAIZE_NAM_FOUNDERS
+    if subpopulation:
+        s = subpopulation.strip()
+        founders = [f for f in founders if f["subpopulation"].lower() == s.lower()]
+
+    return {
+        "panel": "Maize Nested Association Mapping (NAM)",
+        "reference": "McMullen et al. 2009 Science 325:737 (PMID 19661427); Hufford et al. 2021 Science 373:655 (PMID 34353948) — reference-quality NAM founder genomes.",
+        "subpopulations": sorted({f["subpopulation"] for f in _MAIZE_NAM_FOUNDERS}),
+        "founder_count": len(founders),
+        "founders": founders,
+        "note": (
+            "B73 is the Ensembl Plants reference assembly. The other 25 "
+            "founder-line assemblies are at maizeGDB.org and on NCBI. For "
+            "smallholder / regenerative breeders, the Tropical/Subtropical "
+            "subpopulation (CIMMYT CML lines, IITA Tzi8, Thai Ki3/Ki11) "
+            "carries diversity for heat / drought / pest pressures that "
+            "elite US dent-corn lines lack."
+        ),
     }
 
 
