@@ -31,6 +31,7 @@ trials, and natural-farming holism remain the other lenses. This tool
 does not replace them.
 """
 
+import concurrent.futures
 import time
 
 import httpx
@@ -120,8 +121,12 @@ mcp = FastMCP(
         "10. find_trait_genes — when the user names a TRAIT but not a "
         "gene ('what's known about drought tolerance in sorghum?'), this "
         "is the fastest grounding. Returns canonical gene symbols + the "
-        "species each was characterized in. Pair with get_orthologs to "
-        "translate to the user's actual crop.\n\n"
+        "species each was characterized in.\n"
+        "11. translate_trait_to_species — composed shortcut: trait + "
+        "target_species in one call. Internally runs find_trait_genes "
+        "then issues concurrent ortholog calls to the target species. "
+        "Use this when the user asks 'what are the drought genes in MY "
+        "crop?' — one call replaces ~7 sequential calls.\n\n"
         "Coordinate convention: Ensembl is 1-based, fully-closed (same as "
         "VCF / GFF). Region strings are 'chrom:start-end' with optional "
         "':strand' (default +1). No 'chr' prefix on plant chromosomes — "
@@ -158,9 +163,9 @@ TRAIT_ATLAS = {
         "genes": [
             {"symbol": "DREB1A", "alias": "CBF3", "characterized_in": "arabidopsis_thaliana", "function": "Master TF activating the cold/drought response regulon; the canonical entry point for drought engineering."},
             {"symbol": "DREB2A", "characterized_in": "arabidopsis_thaliana", "function": "TF activating osmotic-stress genes under drought and heat."},
-            {"symbol": "SnRK2.6", "alias": "OST1", "characterized_in": "arabidopsis_thaliana", "function": "ABA-activated kinase, central to stomatal closure under water deficit."},
-            {"symbol": "RD29A", "alias": "COR78", "characterized_in": "arabidopsis_thaliana", "function": "Dehydration-responsive marker gene; classical DREB1A target."},
-            {"symbol": "HVA1", "characterized_in": "hordeum_vulgare", "function": "Group 3 LEA protein; barley drought-tolerance marker, transgene-validated in rice and wheat."},
+            {"symbol": "OST1", "alias": "SnRK2.6", "ensembl_id": "AT4G33950", "characterized_in": "arabidopsis_thaliana", "function": "ABA-activated kinase, central to stomatal closure under water deficit."},
+            {"symbol": "RD29A", "alias": "COR78 / LTI78", "ensembl_id": "AT5G52310", "characterized_in": "arabidopsis_thaliana", "function": "Dehydration-responsive marker gene; classical DREB1A target."},
+            {"symbol": "HVA1", "characterized_in": "hordeum_vulgare", "function": "Group 3 LEA protein; barley drought-tolerance marker, transgene-validated in rice and wheat.", "note": "Literature handle — barley HVA1 doesn't resolve by symbol in Ensembl Plants; cited via the source literature (Hong et al. 1988)."},
             {"symbol": "DRO1", "characterized_in": "oryza_sativa", "function": "Deeper-rooting QTL — promotes vertical root growth and drought avoidance in rice."},
         ],
     },
@@ -173,7 +178,7 @@ TRAIT_ATLAS = {
             {"symbol": "SOS3", "alias": "CBL4", "characterized_in": "arabidopsis_thaliana", "function": "Ca2+ sensor that perceives salt-induced cytosolic Ca2+ spike."},
             {"symbol": "NHX1", "characterized_in": "arabidopsis_thaliana", "function": "Vacuolar Na+/H+ antiporter — sequesters cytotoxic sodium away from cytoplasm."},
             {"symbol": "HKT1", "characterized_in": "arabidopsis_thaliana", "function": "Na+ transporter; xylem unloading limits Na+ shoot accumulation."},
-            {"symbol": "OsHKT1;5", "characterized_in": "oryza_sativa", "function": "Rice ortholog of HKT1; Saltol QTL on chromosome 1 in salt-tolerant Pokkali landrace."},
+            {"symbol": "OsHKT1;5", "ensembl_id": "Os01g0307500", "characterized_in": "oryza_sativa", "function": "Rice ortholog of HKT1; Saltol QTL on chromosome 1 in salt-tolerant Pokkali landrace."},
         ],
     },
     "cold_tolerance": {
@@ -200,9 +205,9 @@ TRAIT_ATLAS = {
         "description": "Rice-specific quiescence vs. escape strategies under flooding; SUB1 (quiescence) and SK1/2 (escape) loci.",
         "natural_farming_relevance": "Hugely important for monsoon-region smallholder rice farmers; SUB1 introgression into mega-varieties was a landmark public-sector breeding success.",
         "genes": [
-            {"symbol": "SUB1A", "characterized_in": "oryza_sativa", "function": "ERF TF on chromosome 9; suppresses elongation under submergence (quiescence strategy) — basis of Swarna-Sub1 and similar flood-tolerant landrace introgressions."},
-            {"symbol": "SK1", "characterized_in": "oryza_sativa", "function": "ERF TF in deepwater rice; promotes internode elongation (escape strategy)."},
-            {"symbol": "SK2", "characterized_in": "oryza_sativa", "function": "Paralog of SK1; same elongation-promoting role under submergence."},
+            {"symbol": "SUB1A", "ensembl_id": "Os09g0286600", "characterized_in": "oryza_sativa", "function": "ERF TF on chromosome 9; suppresses elongation under submergence (quiescence strategy) — basis of Swarna-Sub1 and similar flood-tolerant landrace introgressions."},
+            {"symbol": "SK1", "characterized_in": "oryza_sativa", "function": "ERF TF in deepwater rice; promotes internode elongation (escape strategy).", "note": "Literature handle — Hattori et al. 2009; not directly resolvable by symbol in current Ensembl Plants."},
+            {"symbol": "SK2", "characterized_in": "oryza_sativa", "function": "Paralog of SK1; same elongation-promoting role under submergence.", "note": "Literature handle — Hattori et al. 2009."},
         ],
     },
     "nitrogen_use_efficiency": {
@@ -210,9 +215,9 @@ TRAIT_ATLAS = {
         "natural_farming_relevance": "Central to KNF / natural-farming nutrient cycling without synthetic fertilizer; high-NUE varieties extract more from the same biologically-managed soil.",
         "genes": [
             {"symbol": "NRT1.1", "alias": "NPF6.3, CHL1", "characterized_in": "arabidopsis_thaliana", "function": "Dual-affinity nitrate transceptor; also signals nitrate status."},
-            {"symbol": "NRT2.1", "characterized_in": "arabidopsis_thaliana", "function": "High-affinity nitrate transporter; dominant under low-N conditions."},
-            {"symbol": "NRT1.1B", "alias": "OsNPF6.5", "characterized_in": "oryza_sativa", "function": "Indica-allele variant underlies superior N-use efficiency in indica vs. japonica rice — landrace breeding target."},
-            {"symbol": "AMT1.1", "characterized_in": "arabidopsis_thaliana", "function": "High-affinity ammonium transporter; dominant N source under acidic-soil / paddy conditions."},
+            {"symbol": "NRT2.1", "ensembl_id": "AT1G08090", "characterized_in": "arabidopsis_thaliana", "function": "High-affinity nitrate transporter; dominant under low-N conditions."},
+            {"symbol": "NRT1.1B", "alias": "OsNPF6.5", "ensembl_id": "Os10g0554200", "characterized_in": "oryza_sativa", "function": "Indica-allele variant underlies superior N-use efficiency in indica vs. japonica rice — landrace breeding target."},
+            {"symbol": "AMT1;1", "alias": "AMT1.1", "ensembl_id": "AT4G13510", "characterized_in": "arabidopsis_thaliana", "function": "High-affinity ammonium transporter; dominant N source under acidic-soil / paddy conditions."},
             {"symbol": "GS1", "characterized_in": "arabidopsis_thaliana", "function": "Cytosolic glutamine synthetase; assimilates NH4+ into glutamine."},
         ],
     },
@@ -220,10 +225,10 @@ TRAIT_ATLAS = {
         "description": "Inorganic phosphate (Pi) uptake transporters and the systemic Pi-starvation response.",
         "natural_farming_relevance": "Phosphorus is the limiting nutrient on weathered tropical soils common to smallholder agriculture; high-P-efficiency varieties + mycorrhizal symbiosis are the natural-farming answer to fertilizer P.",
         "genes": [
-            {"symbol": "PHT1.1", "characterized_in": "arabidopsis_thaliana", "function": "Root high-affinity Pi transporter."},
+            {"symbol": "PHT1;1", "alias": "PHT1.1", "ensembl_id": "AT5G43350", "characterized_in": "arabidopsis_thaliana", "function": "Root high-affinity Pi transporter."},
             {"symbol": "PHO2", "alias": "UBC24", "characterized_in": "arabidopsis_thaliana", "function": "E2 ubiquitin ligase that down-regulates Pi uptake under P-replete conditions; miR399 target."},
             {"symbol": "PHR1", "characterized_in": "arabidopsis_thaliana", "function": "Master TF of the Pi-starvation response."},
-            {"symbol": "PSTOL1", "characterized_in": "oryza_sativa", "function": "Phosphorus-Starvation Tolerance 1 — protein kinase; the Kasalath landrace allele dramatically improves rice P uptake on low-P soils. A canonical public-sector breeding success."},
+            {"symbol": "PSTOL1", "ensembl_id": "Os12g0552900", "characterized_in": "oryza_sativa", "function": "Phosphorus-Starvation Tolerance 1 — protein kinase; the Kasalath landrace allele dramatically improves rice P uptake on low-P soils. A canonical public-sector breeding success (Gamuyao et al. 2012)."},
         ],
     },
     "iron_uptake": {
@@ -232,39 +237,39 @@ TRAIT_ATLAS = {
         "genes": [
             {"symbol": "IRT1", "characterized_in": "arabidopsis_thaliana", "function": "Root Fe2+ transporter (Strategy I); also takes up Zn, Mn, Cd — bottleneck for biofortification AND cadmium-accumulation."},
             {"symbol": "FRO2", "characterized_in": "arabidopsis_thaliana", "function": "Root-surface Fe3+ reductase; Strategy I."},
-            {"symbol": "FIT", "alias": "FER", "characterized_in": "arabidopsis_thaliana", "function": "bHLH TF; master regulator of Strategy I Fe response."},
-            {"symbol": "IDS3", "characterized_in": "hordeum_vulgare", "function": "Mugineic-acid biosynthesis; grass Strategy II Fe chelator."},
+            {"symbol": "FIT", "alias": "FER / FIT1", "ensembl_id": "AT2G28160", "characterized_in": "arabidopsis_thaliana", "function": "bHLH TF; master regulator of Strategy I Fe response."},
+            {"symbol": "IDS3", "characterized_in": "hordeum_vulgare", "function": "Mugineic-acid biosynthesis; grass Strategy II Fe chelator.", "note": "Literature handle — Nakanishi et al. 2000; not directly resolvable by symbol."},
         ],
     },
     "mycorrhizal_symbiosis": {
         "description": "Common symbiosis (SYM) pathway enabling arbuscular mycorrhizal (AM) fungal colonization of root cells.",
         "natural_farming_relevance": "Central to Korean Natural Farming and JADAM nutrient strategies — AM fungi extend root reach and bridge plants to P, Zn, water. Most flowering plants are AM-competent.",
         "genes": [
-            {"symbol": "SYMRK", "alias": "DMI2", "characterized_in": "medicago_truncatula", "function": "LRR receptor-like kinase essential for both AM and rhizobial symbiosis."},
+            {"symbol": "SYMRK", "alias": "DMI2", "characterized_in": "medicago_truncatula", "function": "LRR receptor-like kinase essential for both AM and rhizobial symbiosis.", "note": "Literature handle — Endre et al. 2002; not directly resolvable by symbol in current Ensembl Plants Medicago build."},
             {"symbol": "CCaMK", "alias": "DMI3", "characterized_in": "medicago_truncatula", "function": "Ca2+/calmodulin-dependent kinase decoding the symbiosis-specific calcium spike."},
             {"symbol": "DMI1", "characterized_in": "medicago_truncatula", "function": "Cation channel required for symbiosis Ca2+ signaling."},
             {"symbol": "PT4", "alias": "PHT1;4", "characterized_in": "medicago_truncatula", "function": "Arbuscule-specific Pi transporter — receives P from the fungal symbiont."},
             {"symbol": "RAM1", "characterized_in": "medicago_truncatula", "function": "GRAS-domain TF required for arbuscule branching and maintenance."},
-            {"symbol": "DELLA", "characterized_in": "arabidopsis_thaliana", "function": "GA-signaling repressor — required for AM colonization; ties symbiosis to gibberellin signaling."},
+            {"symbol": "GAI", "alias": "DELLA family", "ensembl_id": "AT1G14920", "characterized_in": "arabidopsis_thaliana", "function": "GA-signaling repressor — DELLA family member required for AM colonization; ties symbiosis to gibberellin signaling."},
         ],
     },
     "rhizobial_nodulation": {
-        "description": "Legume-specific nitrogen-fixing root-nodule symbiosis with rhizobia; shares the SYM pathway upstream with mycorrhizal signaling.",
+        "description": "Legume-specific nitrogen-fixing root-nodule symbiosis with rhizobia; shares the SYM pathway upstream with mycorrhizal signaling. Listed in Medicago truncatula (an Ensembl Plants species) for direct lookup; Lotus japonicus is the other classical model but is not currently in Ensembl Plants.",
         "natural_farming_relevance": "The atmospheric-N-fixation engine of legume-based natural farming and cover cropping (cowpea, common bean, hairy vetch, faba bean).",
         "genes": [
-            {"symbol": "NFR1", "characterized_in": "lotus_japonicus", "function": "LysM receptor kinase perceiving rhizobial Nod factor."},
-            {"symbol": "NFR5", "characterized_in": "lotus_japonicus", "function": "Co-receptor of NFR1 for Nod-factor perception."},
-            {"symbol": "NIN", "characterized_in": "lotus_japonicus", "function": "Nodulation-specific TF — master regulator of nodule organogenesis."},
+            {"symbol": "NFP", "alias": "Lotus NFR5 ortholog", "characterized_in": "medicago_truncatula", "function": "LysM receptor kinase perceiving rhizobial Nod factor; Medicago counterpart to Lotus NFR5."},
+            {"symbol": "LYK3", "alias": "Lotus NFR1 ortholog", "characterized_in": "medicago_truncatula", "function": "Co-receptor for Nod-factor perception; Medicago counterpart to Lotus NFR1."},
+            {"symbol": "NIN", "characterized_in": "medicago_truncatula", "function": "Nodulation-specific TF — master regulator of nodule organogenesis."},
             {"symbol": "ERN1", "characterized_in": "medicago_truncatula", "function": "ERF TF required for infection-thread formation."},
-            {"symbol": "NSP1", "characterized_in": "medicago_truncatula", "function": "GRAS-domain TF activating early Nod-factor responses."},
+            {"symbol": "NSP1", "characterized_in": "medicago_truncatula", "function": "GRAS-domain TF activating early Nod-factor responses.", "note": "Literature handle — Smit et al. 2005; not directly resolvable by symbol in current Medicago build."},
         ],
     },
     "root_architecture": {
         "description": "Lateral-root development, root depth, and root-hair density — the plant's interface with soil.",
         "natural_farming_relevance": "Root architecture is the *physical* interface to KNF-managed soil biology; deeper / denser / hairier roots = more rhizosphere recruitment, more drought escape, more nutrient capture.",
         "genes": [
-            {"symbol": "PIN2", "characterized_in": "arabidopsis_thaliana", "function": "Auxin efflux carrier directing root-tip gravitropism."},
-            {"symbol": "ARF7", "characterized_in": "arabidopsis_thaliana", "function": "Auxin response factor; master regulator of lateral-root initiation."},
+            {"symbol": "EIR1", "alias": "PIN2", "ensembl_id": "AT5G57090", "characterized_in": "arabidopsis_thaliana", "function": "Auxin efflux carrier directing root-tip gravitropism. Ensembl Plants display name is EIR1; literature commonly uses PIN2."},
+            {"symbol": "NPH4", "alias": "ARF7", "ensembl_id": "AT5G20730", "characterized_in": "arabidopsis_thaliana", "function": "Auxin response factor; master regulator of lateral-root initiation. Ensembl Plants display name is NPH4; literature commonly uses ARF7."},
             {"symbol": "LBD16", "characterized_in": "arabidopsis_thaliana", "function": "Lateral-organ-boundary TF; specifies lateral-root founder cells."},
             {"symbol": "RHD6", "characterized_in": "arabidopsis_thaliana", "function": "bHLH TF; master regulator of root-hair cell fate."},
             {"symbol": "DRO1", "characterized_in": "oryza_sativa", "function": "Deep-Rooting 1 — promotes vertical root growth; drought-avoidance QTL."},
@@ -288,7 +293,7 @@ TRAIT_ATLAS = {
             {"symbol": "TPS21", "characterized_in": "arabidopsis_thaliana", "function": "Sesquiterpene synthase producing (E)-β-caryophyllene."},
             {"symbol": "TPS10", "characterized_in": "zea_mays", "function": "Maize sesquiterpene synthase; (E)-β-farnesene production for indirect parasitoid recruitment."},
             {"symbol": "STO1", "characterized_in": "oryza_sativa", "function": "Diterpene synthase; precursor to momilactones (rice allelopathic compounds)."},
-            {"symbol": "OsKSL4", "characterized_in": "oryza_sativa", "function": "Kaurene synthase-like — momilactone biosynthesis cluster on chromosome 4."},
+            {"symbol": "OsKS4", "alias": "OsKSL4", "ensembl_id": "Os04g0179700", "characterized_in": "oryza_sativa", "function": "Kaurene synthase-like — momilactone biosynthesis cluster on chromosome 4. Ensembl display name is OsKS4."},
         ],
     },
     "glucosinolate_biosynthesis": {
@@ -308,24 +313,24 @@ TRAIT_ATLAS = {
             {"symbol": "FT", "characterized_in": "arabidopsis_thaliana", "function": "Florigen — phloem-mobile signal triggering flowering."},
             {"symbol": "CO", "alias": "CONSTANS", "characterized_in": "arabidopsis_thaliana", "function": "Photoperiod-sensitive TF activating FT in long days."},
             {"symbol": "FLC", "characterized_in": "arabidopsis_thaliana", "function": "MADS-box floral repressor silenced by vernalization."},
-            {"symbol": "VRN1", "characterized_in": "triticum_aestivum", "function": "Wheat VRN1 — vernalization response; spring vs. winter wheat allelic basis."},
-            {"symbol": "Hd1", "characterized_in": "oryza_sativa", "function": "Rice CO ortholog; heading-date QTL underlying photoperiod adaptation across rice latitudes."},
+            {"symbol": "Vrn-A1", "alias": "VRN1", "characterized_in": "triticum_aestivum", "function": "Wheat VRN-A1 — vernalization response; spring vs. winter wheat allelic basis. Ensembl display name uses hyphenated form."},
+            {"symbol": "Hd1", "ensembl_id": "Os06g0275000", "characterized_in": "oryza_sativa", "function": "Rice CO ortholog; heading-date QTL underlying photoperiod adaptation across rice latitudes."},
         ],
     },
     "plant_height_dwarfing": {
         "description": "Gibberellin-signaling alleles underlying the Green Revolution semi-dwarf phenotype.",
         "natural_farming_relevance": "Dwarfing alleles trade off against root depth and lodging resistance vs. yield-under-irrigation. Heritage tall varieties carry recessive *wild-type* alleles at these loci — relevant to context-specific landrace selection.",
         "genes": [
-            {"symbol": "SD1", "characterized_in": "oryza_sativa", "function": "GA20 oxidase — IR8 'miracle rice' semi-dwarf allele underlying the rice Green Revolution."},
+            {"symbol": "SD1", "alias": "C20ox2 / OsGA20ox2", "ensembl_id": "Os01g0883800", "characterized_in": "oryza_sativa", "function": "GA20 oxidase — IR8 'miracle rice' semi-dwarf allele underlying the rice Green Revolution. Ensembl display name is C20ox2."},
             {"symbol": "Rht-B1", "characterized_in": "triticum_aestivum", "function": "Wheat DELLA — gain-of-function alleles cause Norin-10 semi-dwarfing."},
-            {"symbol": "D8", "characterized_in": "zea_mays", "function": "Maize DELLA; dwarfing allele used in some hybrid backgrounds."},
+            {"symbol": "D8", "ensembl_id": "Zm00001eb019200", "characterized_in": "zea_mays", "function": "Maize DELLA; dwarfing allele used in some hybrid backgrounds."},
         ],
     },
     "tiller_branching": {
         "description": "Strigolactone signaling and TB1-family TFs governing shoot branching / tillering architecture.",
         "natural_farming_relevance": "Tiller number is a primary yield-architecture lever in cereals; landrace selection often shifts this trait toward the local growing system.",
         "genes": [
-            {"symbol": "TB1", "alias": "tb1", "characterized_in": "zea_mays", "function": "TCP-domain TF — single locus underlying the most dramatic morphological difference between maize and teosinte (suppressed tillering)."},
+            {"symbol": "TB1", "alias": "tb1 / teosinte branched 1", "ensembl_id": "Zm00001eb287100", "characterized_in": "zea_mays", "function": "TCP-domain TF — single locus underlying the most dramatic morphological difference between maize and teosinte (suppressed tillering). Stable ID is from B73 v5 NAM assembly."},
             {"symbol": "MAX2", "characterized_in": "arabidopsis_thaliana", "function": "F-box strigolactone-signaling component; loss-of-function = bushy shoots."},
             {"symbol": "D14", "characterized_in": "oryza_sativa", "function": "Strigolactone receptor in rice."},
             {"symbol": "MOC1", "characterized_in": "oryza_sativa", "function": "GRAS TF promoting tiller bud outgrowth."},
@@ -336,11 +341,103 @@ TRAIT_ATLAS = {
         "natural_farming_relevance": "Al toxicity is THE major constraint on crop yield on acidic tropical soils — the soils where many smallholder farmers work and where heritage landraces have been selected for tolerance over generations.",
         "genes": [
             {"symbol": "ALMT1", "characterized_in": "triticum_aestivum", "function": "Root-tip malate efflux transporter — first cloned Al-tolerance gene; classical wheat tolerance allele."},
-            {"symbol": "MATE1", "alias": "AltSB", "characterized_in": "sorghum_bicolor", "function": "Root citrate efflux; the major sorghum Al-tolerance gene (Magalhães et al.)."},
+            {"symbol": "MATE1", "alias": "AltSB / SbMATE", "characterized_in": "sorghum_bicolor", "function": "Root citrate efflux; the major sorghum Al-tolerance gene (Magalhães et al. 2007).", "note": "Literature handle — sorghum SbMATE is at locus Sb03g043890 / SORBI_3003G432200 depending on assembly; not directly resolvable by symbol."},
             {"symbol": "STOP1", "characterized_in": "arabidopsis_thaliana", "function": "Zn-finger TF activating ALMT1 and other Al-tolerance genes under acidic conditions."},
         ],
     },
+    "cell_wall_biosynthesis": {
+        "description": "Cellulose, lignin, and hemicellulose biosynthesis. Determines biomass quality, structural strength, biofuel digestibility, and pest/pathogen mechanical defense.",
+        "natural_farming_relevance": "Cell-wall composition controls residue decomposition rates (relevant to KNF / regenerative composting), lodging resistance in heritage cereals, and structural strength in fiber crops. Lignin-modified varieties are easier to convert to biochar or saccharify for on-farm biofuels.",
+        "genes": [
+            {"symbol": "CESA1", "characterized_in": "arabidopsis_thaliana", "function": "Cellulose synthase catalytic subunit; primary-wall cellulose biosynthesis."},
+            {"symbol": "CESA4", "alias": "IRX5", "characterized_in": "arabidopsis_thaliana", "function": "Secondary-wall cellulose synthase; required for normal xylem development."},
+            {"symbol": "PAL1", "characterized_in": "arabidopsis_thaliana", "function": "Phenylalanine ammonia-lyase — first committed step in the phenylpropanoid pathway feeding lignin biosynthesis."},
+            {"symbol": "CCR1", "characterized_in": "arabidopsis_thaliana", "function": "Cinnamoyl-CoA reductase; key lignin-monomer biosynthesis step. Down-regulation reduces lignin and improves digestibility."},
+            {"symbol": "CAD5", "alias": "CAD", "ensembl_id": "AT4G34230", "characterized_in": "arabidopsis_thaliana", "function": "Cinnamyl alcohol dehydrogenase 5; lignin monolignol biosynthesis."},
+        ],
+    },
+    "grain_quality": {
+        "description": "Endosperm starch / protein / aroma genes controlling cooking quality, nutrition, and culinary identity of cereal landraces.",
+        "natural_farming_relevance": "Heritage cereal varieties (e.g. fragrant basmati / jasmine rices, glutinous rices, high-amylose sorghum, durum/einkorn wheat) carry distinctive grain-quality alleles. These genes underlie the culinary value that smallholder seed-keepers conserve.",
+        "genes": [
+            {"symbol": "Wx", "alias": "Waxy / GBSSI", "ensembl_id": "Os06g0133000", "characterized_in": "oryza_sativa", "function": "Granule-bound starch synthase; produces amylose. Loss-of-function alleles produce glutinous (waxy) rice; intermediate alleles produce low-amylose varieties (jasmine, basmati)."},
+            {"symbol": "BADH2", "alias": "fgr / Fragrant / Os2AP", "ensembl_id": "Os08g0424500", "characterized_in": "oryza_sativa", "function": "Betaine aldehyde dehydrogenase 2; loss-of-function in basmati and jasmine landraces causes 2-acetyl-1-pyrroline accumulation (the popcorn-like fragrance)."},
+            {"symbol": "GBSSII", "characterized_in": "oryza_sativa", "function": "Soluble starch synthase; controls intermediate amylose levels.", "note": "Literature handle — GBSSII is the soluble paralog of Wx/GBSSI; not directly resolvable by symbol."},
+            {"symbol": "GLU-A1", "characterized_in": "triticum_aestivum", "function": "Glutenin subunit — major bread-making quality determinant in wheat.", "note": "Literature handle — high-molecular-weight glutenin loci on wheat 1A; not directly resolvable by symbol."},
+        ],
+    },
+    "photosynthesis_c4": {
+        "description": "C4 carbon-concentrating pathway enzymes — the photosynthetic biochemistry of maize, sorghum, sugarcane, millet that confers high water-use and N-use efficiency under hot conditions.",
+        "natural_farming_relevance": "C4 cereals (maize, sorghum, millets) are the staple of many smallholder farming systems in hot, semi-arid regions precisely because C4 photosynthesis outperforms C3 under heat and limited water. Understanding the underlying genes informs heritage-landrace selection.",
+        "genes": [
+            {"symbol": "PEPC", "alias": "PPC / PPC1", "characterized_in": "zea_mays", "function": "Phosphoenolpyruvate carboxylase — the primary CO2-fixing enzyme of C4 photosynthesis in mesophyll cells.", "note": "Literature handle — maize PEPC family; use Ensembl Compara orthology from Arabidopsis PPC1 (AT1G53310) for cross-species lookup."},
+            {"symbol": "NADP-ME", "alias": "ME1 / ZmME", "characterized_in": "zea_mays", "function": "NADP-malic enzyme — decarboxylates malate in bundle-sheath cells, releasing CO2 to Rubisco.", "note": "Literature handle — use ortholog lookup from Arabidopsis NADP-ME1 (AT2G19900) etc."},
+            {"symbol": "PPDK", "characterized_in": "zea_mays", "function": "Pyruvate orthophosphate dikinase — regenerates PEP from pyruvate; rate-limiting step in C4 cycle.", "note": "Literature handle — use ortholog lookup from Arabidopsis PPDK (AT4G15530)."},
+            {"symbol": "RBCS1A", "alias": "RBCS / Rubisco small subunit", "ensembl_id": "AT1G67090", "characterized_in": "arabidopsis_thaliana", "function": "Rubisco small subunit — the universal carboxylase that both C3 and C4 plants depend on; included for orientation, kinetics differ between C3 and C4 lineages."},
+        ],
+    },
 }
+
+
+# Species quality grading — surfaces the unevenness of plant variation
+# coverage directly inside tool responses. Lets the LLM moderate its claims
+# without having to remember species-by-species the way it would from prose.
+_SPECIES_QUALITY = {
+    "arabidopsis_thaliana": {
+        "tier": "richly_covered",
+        "variation_source": "1001 Genomes Project (~1,135 accessions, ~12M SNPs)",
+        "gene_annotation": "Araport11 (highest curation)",
+    },
+    "oryza_sativa": {
+        "tier": "richly_covered",
+        "variation_source": "3K Rice Genomes Project + other catalogs",
+        "gene_annotation": "RAPdb / IRGSP-1.0 (high curation)",
+    },
+    "oryza_indica": {
+        "tier": "richly_covered",
+        "variation_source": "3K Rice Genomes Project (indica subset)",
+        "gene_annotation": "Reference quality",
+    },
+    "vitis_vinifera": {
+        "tier": "moderately_covered",
+        "variation_source": "Partial — viticulture-focused catalogs",
+        "gene_annotation": "Reference quality",
+    },
+    "zea_mays": {
+        "tier": "moderately_covered",
+        "variation_source": "HapMap / NAM panel (some variants exposed)",
+        "gene_annotation": "B73 v5 NAM (high curation)",
+    },
+    "triticum_aestivum": {
+        "tier": "moderately_covered",
+        "variation_source": "Partial — IWGSC + breeding population resequencing",
+        "gene_annotation": "IWGSC (high curation but HEXAPLOID — three subgenomes A/B/D)",
+    },
+    "solanum_lycopersicum": {
+        "tier": "moderately_covered",
+        "variation_source": "150 Tomato Genome Project + Varitome",
+        "gene_annotation": "Reference quality",
+    },
+}
+
+# Default for any species that isn't in the explicit table — most plant
+# genomes in Ensembl have gene models but no variation database.
+_SPECIES_QUALITY_DEFAULT = {
+    "tier": "gene_models_only",
+    "variation_source": "None or very limited — Ensembl Plants gene models exist but no population-variant catalog. Empty search_variants_in_region results are a data gap, not a tool error.",
+    "gene_annotation": "Reference quality (per Ensembl Plants release)",
+}
+
+
+def _species_quality(species: str) -> dict:
+    """Return a structured quality grade for the species.
+
+    Surfaced inside tool responses so an LLM doesn't have to remember
+    species-by-species which have rich variation data vs. only gene models.
+    """
+    if species in COMMUNITY_RESOURCES:
+        return {"tier": "not_in_ensembl_plants", "see": "community fallback alternatives"}
+    return _SPECIES_QUALITY.get(species, _SPECIES_QUALITY_DEFAULT) | {"species": species}
 
 
 def _community_fallback(species: str, tool: str) -> dict | None:
@@ -602,6 +699,7 @@ def search_variants_in_region(
     return {
         "region": r,
         "species": species,
+        "species_quality": _species_quality(species),
         "count": len(variants),
         "truncated": truncated,
         "variants": [
@@ -658,6 +756,7 @@ def get_variant(variant_id: str, species: str | None = None) -> dict:
         "variant_id": data.get("name") or vid,
         "ensembl_url": _ensembl_variant_url(species, data.get("name") or vid),
         "species": species,
+        "species_quality": _species_quality(species),
         "variant_class": data.get("var_class"),
         "most_severe_consequence": data.get("most_severe_consequence"),
         "ambiguity": data.get("ambiguity"),
@@ -1098,17 +1197,123 @@ def find_trait_genes(trait: str, target_species: str | None = None) -> dict:
         "genes": entry["genes"],
     }
     if target_species:
-        result["target_species"] = _normalize_species(target_species)
+        target = _normalize_species(target_species)
+        result["target_species"] = target
+        result["target_species_quality"] = _species_quality(target)
         result["followup_hint"] = (
-            f"To find the equivalent gene(s) in {result['target_species']}, "
-            "call get_orthologs(gene=<symbol>, species=<characterized_in>, "
-            f"target_species='{result['target_species']}') for each gene of "
-            "interest. Pay attention to ortholog_one2many results — plants "
-            "have undergone whole-genome duplications, so multiple paralogs "
-            "are common, especially in maize, wheat (hexaploid), and "
-            "sugarcane / sorghum."
+            f"To find the equivalent gene(s) in {target}, call "
+            f"translate_trait_to_species(trait='{matched_key}', "
+            f"target_species='{target}') for a one-shot batched lookup, OR "
+            "call get_orthologs per gene for fine-grained control. "
+            "Pay attention to ortholog_one2many results — plants have "
+            "undergone whole-genome duplications, so multiple paralogs are "
+            "common, especially in maize, wheat (hexaploid), and sugarcane."
         )
     return result
+
+
+@mcp.tool()
+def translate_trait_to_species(trait: str, target_species: str, max_genes: int | None = None) -> dict:
+    """Composed tool: trait → canonical genes → orthologs in target species.
+
+    Replaces the common multi-call workflow (find_trait_genes + N×get_orthologs)
+    with a single tool call. Issues the ortholog lookups concurrently to keep
+    latency bounded — for a 6-gene trait, ~6× speedup vs. sequential.
+
+    For each canonical gene in the trait atlas, this tool calls
+    `get_orthologs` from the gene's characterized_in species to the
+    target species, then returns a unified table: the canonical gene,
+    its function, and the resolved ortholog(s) in the target species
+    (with ortholog type and taxonomy level for confidence assessment).
+
+    Args:
+        trait: A trait key (loose match accepted, e.g. 'drought' →
+               'drought_tolerance'). See list_trait_categories.
+        target_species: The species you want answers in, e.g.
+                        'sorghum_bicolor', 'oryza_sativa', 'glycine_max'.
+        max_genes: Optional cap on how many genes to translate (default
+                   all). Use to keep response sizes bounded for traits
+                   with many canonical genes.
+    """
+    # Resolve trait first (reuses find_trait_genes logic — no HTTP)
+    trait_result = find_trait_genes(trait=trait)
+    if "error" in trait_result:
+        return trait_result
+
+    target = _normalize_species(target_species)
+    target_fallback = _community_fallback(target, "translate_trait_to_species")
+    if target_fallback:
+        return target_fallback
+
+    canonical_genes = trait_result["genes"]
+    if max_genes:
+        canonical_genes = canonical_genes[:max_genes]
+
+    started = time.monotonic()
+
+    def _resolve_one(gene: dict) -> dict:
+        source_species = gene["characterized_in"]
+        # If the source species isn't in Ensembl Plants, ortholog lookup
+        # won't work either — mark unresolvable.
+        if source_species in COMMUNITY_RESOURCES:
+            return {
+                "canonical_gene": gene,
+                "ortholog_count": 0,
+                "orthologs": [],
+                "status": "source_species_not_in_ensembl_plants",
+            }
+        # Prefer ensembl_id when present (more durable than symbols).
+        lookup_handle = gene.get("ensembl_id") or gene["symbol"]
+        try:
+            ortho = get_orthologs(gene=lookup_handle, species=source_species, target_species=target)
+        except httpx.HTTPError as e:
+            return {
+                "canonical_gene": gene,
+                "ortholog_count": 0,
+                "orthologs": [],
+                "status": f"http_error: {e}",
+            }
+        if "error" in ortho:
+            return {
+                "canonical_gene": gene,
+                "ortholog_count": 0,
+                "orthologs": [],
+                "status": ortho["error"],
+            }
+        return {
+            "canonical_gene": gene,
+            "ortholog_count": ortho["ortholog_count"],
+            "orthologs": ortho["orthologs"],
+            "status": "ok",
+        }
+
+    # Concurrent ortholog calls. Worker count capped at 6 to be polite to
+    # Ensembl REST (their soft limit is ~15 req/sec).
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+        translations = list(pool.map(_resolve_one, canonical_genes))
+
+    elapsed = time.monotonic() - started
+
+    successful = sum(1 for t in translations if t["status"] == "ok" and t["ortholog_count"] > 0)
+    return {
+        "trait": trait_result["trait"],
+        "description": trait_result["description"],
+        "natural_farming_relevance": trait_result["natural_farming_relevance"],
+        "target_species": target,
+        "target_species_quality": _species_quality(target),
+        "canonical_gene_count": len(canonical_genes),
+        "translations_with_orthologs": successful,
+        "elapsed_seconds": round(elapsed, 2),
+        "translations": translations,
+        "note": (
+            "Many-to-many ortholog calls are normal in plants due to "
+            "whole-genome duplications — translations_with_orthologs counts "
+            "canonical genes that resolved to at least one ortholog. A '0' "
+            "could mean: gene not in Ensembl Plants source species (e.g. "
+            "literature handles flagged in the atlas), or the homology call "
+            "doesn't exist in Ensembl Compara for the target species."
+        ),
+    }
 
 
 def main():

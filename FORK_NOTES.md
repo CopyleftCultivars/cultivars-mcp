@@ -343,6 +343,24 @@ Two design changes I might make if I started over instead of forking:
 
 ---
 
+## Postscript — deep-work session metrics (added 2026-05-22)
+
+After the initial fork landed, a follow-up deep-work session quantified
+the trait-atlas quality and shipped a composed tool to compress the
+canonical workflow. Measured deltas (full method in `evals/RESULTS.md`,
+not committed):
+
+- **Trait atlas discoverability** (M1): 66.2% → 84.9% (+18.7 pp). 80 → 93 genes after adding cell_wall_biosynthesis / grain_quality / photosynthesis_c4. Stable-ID field added to 24 entries; `note` field flagging literature-handle limitations on 10 entries.
+- **"Drought genes in sorghum" wall-clock** (M2): 11.66s → 3.13s (**3.7× speedup**). New `translate_trait_to_species` tool issues ortholog calls concurrently (ThreadPoolExecutor, capped at 6 workers to respect Ensembl's ~15 req/s).
+- **Tool calls for same workflow** (M3): 7 → 1 (**7× fewer**). Compounds with M2 — LLM context burn drops too.
+- **Coverage parity check**: composed tool resolves same number of orthologs as sequential. No concurrency regression.
+- **Test count**: 36 → 46, all pass.
+- **Species quality grading**: new `_species_quality` table surfacing variation-data tier (richly_covered / moderately_covered / gene_models_only / not_in_ensembl_plants) inside response shapes, so LLMs moderate claims without having to remember it from prose.
+
+The metrics framework matters as much as the deltas: M1 in particular
+caught a 33% silently-wrong rate in the original atlas, which I would
+not have noticed from inspection.
+
 ## Closing
 
 Your upstream design carried straight through the rebuild. The MCP

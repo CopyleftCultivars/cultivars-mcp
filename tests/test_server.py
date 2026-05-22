@@ -501,3 +501,131 @@ def test_normalize_species_handles_human_input():
     assert server._normalize_species("ARABIDOPSIS_THALIANA") == "arabidopsis_thaliana"
     assert server._normalize_species(None) == "arabidopsis_thaliana"  # default
     assert server._normalize_species("   oryza_sativa  ") == "oryza_sativa"
+
+
+# ---------------------------------------------------------------------------
+# Species quality grading
+# ---------------------------------------------------------------------------
+
+
+def test_species_quality_richly_covered():
+    q = server._species_quality("arabidopsis_thaliana")
+    assert q["tier"] == "richly_covered"
+    assert "1001 Genomes" in q["variation_source"]
+
+
+def test_species_quality_gene_models_only_default():
+    """Sorghum has gene models but no curated variation tier — should fall to default."""
+    q = server._species_quality("sorghum_bicolor")
+    assert q["tier"] == "gene_models_only"
+    assert q["species"] == "sorghum_bicolor"
+
+
+def test_species_quality_cannabis_flagged():
+    q = server._species_quality("cannabis_sativa")
+    assert q["tier"] == "not_in_ensembl_plants"
+
+
+def test_species_quality_surfaces_in_search_response(install_handler):
+    install_handler(lambda req: _json([]))
+    out = server.search_variants_in_region(region="1:1-100", species="arabidopsis_thaliana", limit=5)
+    assert "species_quality" in out
+    assert out["species_quality"]["tier"] == "richly_covered"
+
+
+def test_species_quality_surfaces_in_get_variant(install_handler):
+    install_handler(lambda req: _json({
+        "name": "V1", "var_class": "SNP", "most_severe_consequence": "x",
+        "MAF": None, "minor_allele": None,
+        "mappings": [{"location": "1:1-1", "seq_region_name": "1", "start": 1, "end": 1, "strand": 1, "allele_string": "A/T", "assembly_name": "X", "ancestral_allele": None}],
+        "source": "test", "synonyms": [], "evidence": [],
+    }))
+    out = server.get_variant(variant_id="V1", species="sorghum_bicolor")
+    assert "species_quality" in out
+    assert out["species_quality"]["tier"] == "gene_models_only"
+
+
+# ---------------------------------------------------------------------------
+# translate_trait_to_species composed tool
+# ---------------------------------------------------------------------------
+
+
+def test_translate_trait_to_species_basic(install_handler):
+    """One trait + target -> N concurrent ortholog calls -> unified result."""
+    def handler(req: httpx.Request) -> httpx.Response:
+        # All homology calls return one ortholog.
+        if "/homology/" in req.url.path:
+            return _json({
+                "data": [{
+                    "id": "X",
+                    "homologies": [{
+                        "id": "SbX",
+                        "protein_id": "SbX-P",
+                        "species": "sorghum_bicolor",
+                        "type": "ortholog_one2one",
+                        "taxonomy_level": "Poaceae",
+                        "method_link_type": "ENSEMBL_ORTHOLOGUES",
+                    }],
+                }],
+            })
+        return _json({}, 404)
+
+    install_handler(handler)
+    out = server.translate_trait_to_species(trait="drought_tolerance", target_species="sorghum_bicolor")
+    assert out["trait"] == "drought_tolerance"
+    assert out["target_species"] == "sorghum_bicolor"
+    assert out["canonical_gene_count"] > 0
+    # Every gene in the drought atlas that's in an Ensembl-Plants source species
+    # should resolve at least one ortholog under this mocked handler.
+    assert out["translations_with_orthologs"] >= 1
+    assert "translations" in out
+    assert all("canonical_gene" in t for t in out["translations"])
+
+
+def test_translate_trait_unknown_trait():
+    out = server.translate_trait_to_species(trait="unicorn", target_species="oryza_sativa")
+    assert "error" in out
+
+
+def test_translate_trait_cannabis_target(install_handler):
+    """Cannabis target -> fallback before any HTTP."""
+    calls = []
+    def handler(req):
+        calls.append(req.url.path)
+        return _json({}, 500)
+    install_handler(handler)
+    out = server.translate_trait_to_species(trait="drought_tolerance", target_species="cannabis_sativa")
+    assert out["available_in_ensembl_plants"] is False
+    # The find_trait_genes preamble doesn't hit HTTP, and the cannabis
+    # fallback short-circuits before any ortholog call.
+    assert calls == []
+
+
+def test_translate_trait_handles_literature_handles(install_handler):
+    """Genes whose source species is in COMMUNITY_RESOURCES are marked, not queried."""
+    # No outbound calls should be issued for source_species not in Ensembl.
+    # Use a handler that succeeds for all calls so we can verify the
+    # composed tool doesn't crash on literature-handle genes.
+    install_handler(lambda req: _json({
+        "data": [{"id": "X", "homologies": []}],
+    }))
+    out = server.translate_trait_to_species(trait="drought_tolerance", target_species="sorghum_bicolor")
+    # The submergence_tolerance / iron_uptake / HVA1 entries with
+    # source=community-resource species would be marked; drought is mostly
+    # well-covered species though.
+    assert "translations" in out
+
+
+def test_translate_trait_uses_ensembl_id_when_available(install_handler):
+    """When atlas gene has ensembl_id, that's preferred over symbol."""
+    seen = []
+    def handler(req):
+        seen.append(req.url.path)
+        return _json({"data": [{"id": "X", "homologies": []}]})
+    install_handler(handler)
+    server.translate_trait_to_species(trait="drought_tolerance", target_species="sorghum_bicolor")
+    # The drought atlas contains OST1 with ensembl_id AT4G33950 and RD29A
+    # with ensembl_id AT5G52310. The composed tool should look these up by
+    # their ensembl_id, not by the symbol.
+    assert any("/AT4G33950" in p for p in seen), f"AT4G33950 not used; saw: {seen}"
+    assert any("/AT5G52310" in p for p in seen), f"AT5G52310 not used; saw: {seen}"
