@@ -1,0 +1,36 @@
+Cultivars MCP — Plant Genomics for the Commons
+Copyright 2026 Copyleft Cultivars Nonprofit and Caleb DeLeeuw
+
+This product includes software originally developed as the EVEE MCP Server
+at https://github.com/goodfire-ai/evee-mcp (Goodfire AI), which provided the
+MCP server scaffolding, the @mcp.tool() decorator pattern, the FastMCP
+transport conventions, the .claude/skills/ skill layout, and the SKILL.md
+"Gotchas" documentation convention. The data semantics, the trait atlas, the
+19-tool surface, and all integrations beyond Ensembl are entirely new in
+this fork.
+
+This product queries data from the following public databases. Each
+preserves its own terms of use; users should respect them:
+
+  - Ensembl Plants (Sanger / EMBL-EBI) — https://plants.ensembl.org/
+  - UniProt (SIB / EMBL-EBI / PIR) — https://www.uniprot.org/
+  - Europe PMC — https://europepmc.org/
+  - STRING-db (SIB / EMBL) — https://string-db.org/
+  - Medicinal Genomics Kannapedia — https://www.kannapedia.net/
+
+We are grateful to the public-sector scientists, curators, and
+infrastructure teams who maintain these resources. Tools that aggregate
+their work are only useful because they make their data freely
+accessible.
+
+This product also references and links to (but does not redistribute
+data from) Plant Reactome (Gramene), MaizeGDB (USDA), the 1001 Genomes
+Project (Arabidopsis), the 3K Rice Genomes Project, and other community
+plant-genomics resources.
+
+This is part of the Copyleft Cultivars Nonprofit ecosystem alongside
+TinyLLamaFarmer (offline natural-farming AI) and gemma4-natural-farming
+(open-weight model fine-tuned on Korean Natural Farming and JADAM
+literature). See https://github.com/CopyleftCultivars for sibling projects.
+
+Plant genetics, like seeds, should circulate freely.
