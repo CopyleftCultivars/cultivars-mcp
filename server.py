@@ -34,6 +34,7 @@ does not replace them.
 import concurrent.futures
 import json
 import pathlib
+import random
 import re
 import time
 
@@ -687,12 +688,21 @@ def _get_client() -> httpx.Client:
 
 
 def _get_with_retry(client: httpx.Client, path: str, **kwargs) -> httpx.Response:
-    """GET wrapper that honors Ensembl's Retry-After on 429/503.
+    """GET wrapper that honors Retry-After on 429/503, with jitter.
 
-    On retryable status: read Retry-After (seconds or HTTP-date — Ensembl
-    sends seconds), cap at 30s, sleep, retry. After _MAX_RETRIES, returns
-    the last response without raising — callers continue with their normal
-    status-code handling.
+    Used for ALL external APIs (Ensembl, UniProt, EuropePMC, STRING-db,
+    Kannapedia) — each can rate-limit and each benefits from the same
+    backoff discipline.
+
+    Backoff strategy:
+      - If the server sends a Retry-After header, honor it (capped at 30s).
+      - Otherwise, exponential backoff: _BASE_BACKOFF_SECONDS * 2^attempt.
+      - Add up to 25% jitter to break up concurrent retries from
+        ThreadPoolExecutor-spawned workers (the translate_trait_to_species
+        path issues up to 6 parallel calls; without jitter they all retry
+        at exactly the same instant = thundering herd against the upstream).
+      - After _MAX_RETRIES, returns the last response without raising —
+        callers continue with their normal status-code handling.
     """
     for attempt in range(_MAX_RETRIES + 1):
         resp = client.get(path, **kwargs)
@@ -700,10 +710,12 @@ def _get_with_retry(client: httpx.Client, path: str, **kwargs) -> httpx.Response
             return resp
         retry_after = resp.headers.get("Retry-After")
         try:
-            wait = float(retry_after) if retry_after else _BASE_BACKOFF_SECONDS * (2 ** attempt)
+            base_wait = float(retry_after) if retry_after else _BASE_BACKOFF_SECONDS * (2 ** attempt)
         except ValueError:
-            wait = _BASE_BACKOFF_SECONDS * (2 ** attempt)
-        wait = min(wait, 30.0)
+            base_wait = _BASE_BACKOFF_SECONDS * (2 ** attempt)
+        # Add up to 25% jitter to decorrelate concurrent retries.
+        jitter = random.uniform(0, base_wait * 0.25)
+        wait = min(base_wait + jitter, 30.0)
         time.sleep(wait)
     return resp  # unreachable, satisfies type-checker
 
@@ -2368,6 +2380,17 @@ def translate_trait_to_species(trait: str, target_species: str, max_genes: int |
                 "ortholog_count": 0,
                 "orthologs": [],
                 "status": f"http_error: {e}",
+            }
+        except Exception as e:
+            # Broader catch: a worker raising any other exception would
+            # propagate through pool.map() and crash the whole batch,
+            # losing results from the other 5 workers. Per-gene failure
+            # should stay per-gene.
+            return {
+                "canonical_gene": gene,
+                "ortholog_count": 0,
+                "orthologs": [],
+                "status": f"unexpected_error: {type(e).__name__}: {e}",
             }
         if "error" in ortho:
             return {

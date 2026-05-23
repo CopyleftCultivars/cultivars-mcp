@@ -423,6 +423,59 @@ def test_retry_gives_up_after_max(install_handler):
     assert counter["n"] == server._MAX_RETRIES + 1
 
 
+def test_retry_uses_jitter(install_handler, monkeypatch):
+    """Concurrent workers retrying at exactly the same intervals = thundering
+    herd. The retry helper adds up to 25% jitter to decorrelate them."""
+    captured_waits = []
+
+    def fake_sleep(t):
+        captured_waits.append(t)
+
+    monkeypatch.setattr(server.time, "sleep", fake_sleep)
+
+    counter = {"n": 0}
+
+    def handler(req):
+        counter["n"] += 1
+        if counter["n"] <= 2:
+            return httpx.Response(429, json={}, headers={"Retry-After": "1"})
+        return _json({"id": "X", "display_name": "Y", "species": "arabidopsis_thaliana"})
+
+    install_handler(handler)
+    server.lookup_gene(gene="X")
+
+    # Retry-After is 1.0; jitter adds 0–25%, so wait should be in [1.0, 1.25],
+    # not exactly 1.0 every time.
+    assert len(captured_waits) == 2
+    for w in captured_waits:
+        assert 1.0 <= w <= 1.30, f"jitter window violated: {w}"
+
+
+def test_translate_trait_catches_unexpected_exceptions(install_handler, monkeypatch):
+    """A KeyError or other non-HTTP exception in one worker must not poison
+    the whole batch. Per-gene failure stays per-gene."""
+
+    # Mock get_orthologs to raise an unexpected exception on the first call
+    # and succeed on the rest.
+    call_count = {"n": 0}
+    original = server.get_orthologs
+
+    def flaky_get_orthologs(*args, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise KeyError("simulated unexpected response shape")
+        return {"ortholog_count": 1, "orthologs": [{"ortholog_id": "X", "type": "ortholog_one2one", "taxonomy_level": "X", "species": "sorghum_bicolor", "protein_id": "X", "method_link_type": "X"}]}
+
+    monkeypatch.setattr(server, "get_orthologs", flaky_get_orthologs)
+
+    out = server.translate_trait_to_species(trait="drought_tolerance", target_species="sorghum_bicolor")
+    # Should not raise; should report the failed worker as unexpected_error
+    statuses = [t["status"] for t in out["translations"]]
+    assert any("unexpected_error" in s for s in statuses), f"expected at least one unexpected_error status; got {statuses}"
+    # Other workers should still have succeeded
+    assert any(s == "ok" for s in statuses), f"expected at least one ok status; got {statuses}"
+
+
 def test_retry_after_503(install_handler):
     counter = {"n": 0}
 
