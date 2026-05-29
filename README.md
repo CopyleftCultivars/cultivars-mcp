@@ -16,6 +16,7 @@ Part of the [Copyleft Cultivars](https://github.com/CopyleftCultivars) ecosystem
 ## Table of contents
 
 - [What it does](#what-it-does)
+- [Community Science Layer](#community-science-layer)
 - [The trait atlas (30 categories, 123 genes, 73% UniProt-curated)](#the-trait-atlas-30-categories-123-genes-73-uniprot-curated)
 - [Honest framings](#honest-framings-per-copyleft-cultivars-mission)
 - [Veracity verification](#veracity-verification)
@@ -227,6 +228,31 @@ get_string_interactions(protein_id="SOS1", species="arabidopsis_thaliana")
 # 10 interactions. Top partner: CIPK24 (= SOS2 — the textbook salt-pathway interactor) at score 0.999.
 ```
 
+**The full community-science loop — "my village's rice survived the flood; can we map the locus?"**
+```
+# 1. Resolve the farmer's seed name to a formal accession
+resolve_accession(query="Gobol Sail")
+#    → IRGC accession + ensembl_species="oryza_sativa"
+
+# 2. Record the observation (writes a schema-v1.0 YAML to ./phenotypes/, ODbL-1.0)
+submit_phenotype_observation(
+    accession_id="IRGC_12345", common_name="Gobol Sail", species="oryza_sativa",
+    trait_category="submergence_tolerance", trait_atlas_gene="SUB1A",
+    measurement_type="binary", measurement_value=True,
+    measurement_protocol="14_day_submergence_field", season="kharif_2026")
+#    → returns canonical_form to sign + PR instructions (no GitHub creds needed)
+
+# 3. (Optional) sign it for verifiable, pseudonymous attribution, then verify
+verify_observation_integrity(yaml_path_or_content="phenotypes/.../...yaml")
+
+# 4. Ask whether the community has enough data to detect the locus
+estimate_gwas_power(trait_category="submergence_tolerance", species="oryza_sativa")
+#    → pulls the live ledger count; "you have N, need ~M for 80% power — recruit M-N more"
+
+# 5. Take it offline to the field tool
+export_offline_snapshot(trait_category="submergence_tolerance", species="oryza_sativa")
+```
+
 ## Skill
 
 A Claude Code skill lives at `.claude/skills/cultivars/SKILL.md`. Agents that load it get triggering criteria tuned to grower-scientist questions, routing guidance for all 28 tools, and explicit caveats about which plant genomes are open vs. paywalled.
@@ -242,6 +268,7 @@ A Claude Code skill lives at `.claude/skills/cultivars/SKILL.md`. Agents that lo
 - **[3K Rice Genomes Project](https://www.nature.com/articles/sdata201418)** — rice population variation
 - **[Plant Reactome](https://plantreactome.gramene.org/)** — plant pathway annotations
 - **[MaizeGDB](https://www.maizegdb.org/)** — maize genome + NAM panel reference
+- **[GRIN-Global](https://npgsweb.ars-grin.gov/gringlobal/search)** (USDA ARS) — 600,000+ germplasm accessions; powers `resolve_accession`
 
 All free. All public. All maintained by people doing real public-sector science.
 
@@ -249,6 +276,10 @@ All free. All public. All maintained by people doing real public-sector science.
 
 This is a fork of [Goodfire's EVEE MCP](https://github.com/goodfire-ai/evee-mcp) (human ClinVar variants via Evo 2 foundation model embeddings). The structural design — FastMCP, `.claude/skills/`, the `@mcp.tool()` decorator pattern, the SKILL.md "Gotchas" convention — carries through. The data, semantics, and 28 tools are entirely new.
 
-License terms follow the upstream EVEE MCP project. Copyleft Cultivars's own contributions are open-source under permissive terms consistent with the org's free-software ethos. The org name signals the commitment: **copyleft** (free software / open data that stays open) for **cultivars** (the heritage and improvement of plant varieties). Plant genetics, like seeds, should circulate freely.
+**Two licenses, deliberately:**
+- **Code** — Apache-2.0 ([LICENSE](LICENSE)), consistent with the upstream EVEE MCP lineage and the org's free-software ethos.
+- **Community data** — the phenotype ledger under `phenotypes/` and any derivative database is **ODbL-1.0** ([DATA_LICENSE.md](DATA_LICENSE.md)), an open-data *copyleft* (share-alike) license — the same model OpenStreetMap uses. A permissive license on data would let anyone enclose the commons in a proprietary database; ODbL keeps it open.
+
+The org name signals the commitment: **copyleft** (free software / open data that stays open) for **cultivars** (the heritage and improvement of plant varieties). Plant genetics, like seeds, should circulate freely. Attribution is via Ed25519 signatures — scientific credit, never a token or coin.
 
 🌱 — Caleb DeLeeuw and the Copyleft Cultivars team
