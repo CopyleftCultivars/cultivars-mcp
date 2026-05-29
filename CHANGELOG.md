@@ -4,7 +4,83 @@ All notable changes to the Cultivars MCP server. Format adapted from [Keep a Cha
 
 The unreleased section reflects work on the `refactor/plant-genomics-cultivars` branch (this PR).
 
-## [Unreleased] — fork from EVEE MCP for plant genomics
+## [Unreleased] — Community Science Layer
+
+Transforms cultivars-mcp from a read-only genomics query layer into a
+participatory community-science instrument: a write path for grower
+observations, cryptographic attribution, collective statistical-power
+reasoning, and bridges to formal accession systems and the offline field tool.
+
+### Tool count: 19 → **28** (+9)
+### Atlas: 30 → **35 categories** (added 5 orphan-crop seed entries)
+### Tests: 91 → **137** (+46 unit/schema/adversarial; still no live network in tests)
+
+### Added — write path & participatory tools
+
+- **`submit_phenotype_observation`** — the write layer. Validates against the
+  atlas + species tables, assembles a schema-v1.0 observation, writes a YAML to
+  a configurable `ledger_dir` (default `./phenotypes/`), and returns the
+  canonical form to sign + PR instructions. No GitHub credentials needed at
+  runtime. Path components are sanitized against traversal.
+- **`query_community_phenotypes`** — aggregates ledger YAMLs (count,
+  measurement distribution, distinct accessions, signed-observation count).
+- **`verify_observation_integrity`** — verifies detached **Ed25519** signatures
+  over the canonical (signature-stripped, sorted-key JSON) observation form,
+  using the `cryptography` package. Pseudonymous scientific attribution, *not*
+  a financial instrument.
+- **`pin_observation_to_ipfs`** — content-addresses an observation (+ optional
+  VCF) via the kubo HTTP API; writes the CID back into the YAML. Structured
+  fallback with setup instructions when no IPFS node is reachable.
+- **`estimate_gwas_power`** — Bonferroni-corrected additive common-variant power
+  calculation (pure-Python probit via Acklam, no scipy). Pulls the current
+  sample size live from the ledger; surfaces the formula, assumptions, and the
+  "recruit N more" gap. Honest caveats about kinship/structure correction.
+- **`resolve_accession`** — bridges folk seed names to USDA **GRIN-Global**
+  accessions and maps the taxon back to an Ensembl species string. Defensive
+  parsing of GRIN's variable JSON shape.
+- **`query_organellar_variants`** — first-class **Mt/Pt** genome queries with a
+  curated organellar mini-atlas (CMS, plastid herbicide resistance, plastid
+  photosynthesis). Wraps `search_variants_in_region` on the organellar chromosome.
+- **`export_offline_snapshot`** — packages a trait's atlas entry, species
+  coverage, and optional orthologs into a portable JSON for TinyLLamaFarmer
+  (online → offline handoff).
+- **`list_orphan_crop_requests`** — surfaces the `WANTED_TRAITS.yaml` bounty list.
+
+### Added — data & licensing
+
+- **`DATA_LICENSE.md`** — adopts **ODbL-1.0** for ledger data (open-data
+  copyleft), distinct from the Apache-2.0 code license, to prevent enclosure.
+- **`WANTED_TRAITS.yaml`** — orphan-crop contribution bounty list (fonio,
+  bambara groundnut, enset, grass pea, quinoa).
+- **`phenotypes/README.md`** — ledger layout + schema-v1.0 reference.
+- 5 orphan-crop trait categories added to `TRAIT_ATLAS`:
+  `teff_drought_tolerance`, `cowpea_heat_tolerance`,
+  `finger_millet_calcium_accumulation`, `pigeon_pea_salinity_tolerance`,
+  `amaranth_c4_photosynthesis`.
+
+### Changed
+
+- **`get_variant`** and **`search_variants_in_region`** gain an optional
+  `population_context` parameter — per-population allele frequencies and a
+  coarse Indica/Japonica Wright's Fst for richly-covered species; structured
+  "not available" notice otherwise. Existing signatures preserved (new param
+  defaults to `False`).
+- `find_trait_genes` loose-matching now prefers a prefix match on a tie, so
+  `'drought'` still resolves to `drought_tolerance` after orphan-crop keys like
+  `teff_drought_tolerance` were added.
+- Dependencies: added `pyyaml>=6.0` and `cryptography>=42.0` (the latter for
+  Ed25519). YAML import is guarded so genomics tools still work without it.
+
+### Deliberately NOT built (per the upgrade brief)
+
+- No utility token / cryptocurrency / on-chain storage. Attribution is Ed25519
+  + ODbL, never a financial instrument.
+- ZK location proofs and foundation-model variant prediction are left as future
+  work (flagged optional / lower-priority in the brief).
+
+---
+
+## [Prior] — fork from EVEE MCP for plant genomics
 
 ### Tool count: 6 (upstream) → **19**
 ### Atlas: 0 → **30 categories, 123 genes, 73% UniProt-curated**

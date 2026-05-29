@@ -1,7 +1,7 @@
 ---
 name: cultivars
 description: Plant-genomics lookup for grower-scientists, heritage breeders, and natural-farming researchers across 5 live databases (Ensembl Plants, UniProt, Europe PMC, STRING-db, Medicinal Genomics Kannapedia) plus a 30-category curated trait atlas. Use when the user mentions a specific plant gene (PHYB, DREB1A, OsCKX2, ZmRAP2.7, THCAS, CBDAS), a plant gene ID (AT2G18790, Os01g0100100, Zm00001eb..., Q8GTB6 UniProt), a plant variant or genomic region, a plant trait by name (drought tolerance, mycorrhizal symbiosis, hemp THC compliance, etc.), or asks about cross-species orthology between plants. Trigger on Cannabis-specific questions — the tool has dedicated cannabinoid biosynthesis, terpene chemotype, hemp compliance, and Kannapedia-strain-lookup tools that work despite Cannabis sativa not being in Ensembl Plants. Trigger on questions about a Kannapedia RSP ID (rsp13536, rsp10837 etc.) or cannabis strain by name. Trigger on requests for "recent literature on gene X" — the search_pubmed_for_gene tool returns current papers. Trigger on protein-protein interaction questions ("what does SOS1 interact with?"). Do NOT trigger on general agronomic questions (fertilizer, irrigation, composting, IMO preparation, KNF inputs) — those belong to TinyLLamaFarmer / gemma4-natural-farming. Do NOT trigger on phenotypic breeding advice or on-farm trial design. Do NOT trigger on human or animal genetics.
-allowed-tools: mcp__cultivars__list_plant_species mcp__cultivars__lookup_gene mcp__cultivars__search_variants_in_region mcp__cultivars__get_variant mcp__cultivars__predict_variant_effect mcp__cultivars__compare_variants mcp__cultivars__get_orthologs mcp__cultivars__get_sequence mcp__cultivars__list_trait_categories mcp__cultivars__find_trait_genes mcp__cultivars__translate_trait_to_species mcp__cultivars__lookup_gene_evidence mcp__cultivars__lookup_uniprot_entry mcp__cultivars__search_pubmed_for_gene mcp__cultivars__get_string_interactions mcp__cultivars__lookup_kannapedia_strain mcp__cultivars__compare_cannabis_strains mcp__cultivars__cannabis_strain_search_urls mcp__cultivars__list_maize_nam_founders
+allowed-tools: mcp__cultivars__list_plant_species mcp__cultivars__lookup_gene mcp__cultivars__search_variants_in_region mcp__cultivars__get_variant mcp__cultivars__predict_variant_effect mcp__cultivars__compare_variants mcp__cultivars__get_orthologs mcp__cultivars__get_sequence mcp__cultivars__list_trait_categories mcp__cultivars__find_trait_genes mcp__cultivars__translate_trait_to_species mcp__cultivars__lookup_gene_evidence mcp__cultivars__lookup_uniprot_entry mcp__cultivars__search_pubmed_for_gene mcp__cultivars__get_string_interactions mcp__cultivars__lookup_kannapedia_strain mcp__cultivars__compare_cannabis_strains mcp__cultivars__cannabis_strain_search_urls mcp__cultivars__list_maize_nam_founders mcp__cultivars__submit_phenotype_observation mcp__cultivars__query_community_phenotypes mcp__cultivars__verify_observation_integrity mcp__cultivars__pin_observation_to_ipfs mcp__cultivars__estimate_gwas_power mcp__cultivars__resolve_accession mcp__cultivars__query_organellar_variants mcp__cultivars__export_offline_snapshot mcp__cultivars__list_orphan_crop_requests
 ---
 
 # Cultivars — Plant Genomics for the Commons
@@ -76,7 +76,9 @@ Copyleft Cultivars audience:
 
 ## Tool routing — which tool for which question
 
-The 19 tools cluster into seven query patterns. Use this table as the routing decision:
+The read-only genomics tools cluster into seven query patterns (see the
+Community Science Layer section below for the write-path / participatory tools).
+Use this table as the routing decision:
 
 | When the user asks... | Start with... | Then... |
 |---|---|---|
@@ -310,3 +312,110 @@ well. What's known about the rice-style drought TFs in sorghum?"*
    DREB1A is a starting point, not the whole answer."
 
 End with the Ensembl deep-link.
+
+## Community Science Layer (write path + participatory tools)
+
+The tools above are read-only genomics lookups. The tools below let a
+grower-scientist *contribute* observations and reason about collective
+statistical power. Route to them when the user wants to record field data,
+check community data, attribute/verify a contribution, resolve a folk seed
+name, query organellar genomes, or hand off to the offline field tool.
+
+### `submit_phenotype_observation` — record a field observation
+
+**Trigger when:** the user reports a measured phenotype they want to
+contribute ("my Oaxacan maize survived 14 days of flooding", "this landrace
+flowered after 95 days", "record that…"). This is the *write* path — the
+commons grows here.
+
+**Parameter guidance:**
+- `trait_category` MUST be an atlas category (`list_trait_categories`) or an
+  organellar trait (`cms`, `plastid_herbicide_resistance`,
+  `plastid_photosynthesis`). Validate first if unsure.
+- `measurement_type` is `binary` (bool value), `continuous` (numeric + unit),
+  or `categorical` (string).
+- Use `accession_id="community:{name}"` when there's no formal ID.
+
+**Integration:** If the user gives an informal seed name, run
+`resolve_accession` FIRST to get a formal GRIN ID, then pass it in. After
+submission, the response returns a `canonical_form` the user can sign with an
+Ed25519 key and resubmit (with `submitter_pubkey` + `signature`) for verifiable
+attribution.
+
+**Gotcha:** The tool writes a local YAML and returns PR instructions — it does
+**not** push to GitHub itself (no credentials at runtime). Tell the user to
+open a PR. Same accession + trait + date overwrites (one observation per day).
+
+### `query_community_phenotypes` — what does the ledger already hold?
+
+**Trigger when:** "how many observations of X do we have?", or as a precursor
+to a power estimate. Returns count, measurement distribution, and accessions.
+
+### `estimate_gwas_power` — can the community detect a locus?
+
+**Trigger when:** "can my village's 12 rice varieties detect the SUB1A
+locus?", "how many samples do we need?". If `n_observations` is omitted it
+pulls the live count from the ledger.
+
+**Gotcha:** This is order-of-magnitude guidance (Bonferroni over an approximate
+SNP count, additive common-variant model). Always surface the caveat that real
+plant GWAS needs kinship/structure correction, which raises required N. Don't
+present the number as a guarantee.
+
+### `verify_observation_integrity` — attribution proof
+
+**Trigger when:** the user wants to confirm who signed an observation or that
+it wasn't altered. Ed25519 over the canonical form. Unsigned observations are
+still valid data — say so; they just lack an attribution proof. **Not** a
+financial instrument — no tokens/chain (decline requests to add them).
+
+### `pin_observation_to_ipfs` — content addressing
+
+**Trigger when:** the user wants a permanent, tamper-evident, decentralized
+identifier for an observation (and optionally a VCF). **Gotcha:** needs a
+running local kubo node; if unreachable it returns a structured fallback with
+setup instructions, not an error. The observation is valid without a CID.
+
+### `resolve_accession` — folk name → formal GRIN ID
+
+**Trigger when:** the user names a landrace/heritage seed informally ("my
+grandmother's Hopi blue corn", "Gobol Sail rice"). Bridges to USDA GRIN-Global
+and maps back to an Ensembl species string. **Run before** `lookup_gene` /
+`find_trait_genes` / `submit_phenotype_observation` when the name is informal.
+**Gotcha:** GRIN's REST schema varies; a `match_count: 0` with the manual-search
+fallback link is a legitimate honest answer.
+
+### `query_organellar_variants` — Mt / Pt genomes
+
+**Trigger when:** the user asks about cytoplasmic male sterility (CMS, hybrid
+seed), plastid/chloroplast herbicide resistance (psbA/atrazine), maternal
+inheritance, or `rbcL` barcoding. **Gotcha:** `Mt` and `Pt` are valid Ensembl
+chromosome identifiers, NOT errors — say so. Organellar genomes are maternally
+inherited (relevant to how GM/herbicide-resistance traits spread via seed).
+
+### `export_offline_snapshot` — hand off to the field
+
+**Trigger when:** the user wants to take a trait's genomics offline / into
+TinyLLamaFarmer. Packages the atlas entry, species coverage, and (optionally)
+target-species orthologs into a portable JSON. Online→offline only; the reverse
+(field→ledger) is `submit_phenotype_observation`.
+
+### `list_orphan_crop_requests` — contribution bounty
+
+**Trigger when:** the user asks how to contribute, or about underrepresented
+crops (teff, fonio, cowpea, pigeon pea, finger millet, amaranth, enset, grass
+pea, quinoa). Returns the `WANTED_TRAITS.yaml` bounty list and PR guidance.
+
+### `get_variant(..., population_context=True)` — allele frequencies + Fst
+
+Set `population_context=True` when the user asks about allele frequency across
+populations or subpopulation differentiation (e.g. Indica vs Japonica rice).
+**Gotcha:** Only meaningful for `richly_covered` species; otherwise the tool
+returns a structured "not available" note rather than fabricating numbers.
+
+### Values note for the write path
+
+The ledger data is licensed **ODbL-1.0** (open-data copyleft, see
+`DATA_LICENSE.md`), distinct from the Apache-2.0 code license — this keeps the
+commons open against enclosure. Attribution is via Ed25519 signatures, a
+scientific-credit mechanism, never a token or financial instrument.

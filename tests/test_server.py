@@ -8,6 +8,7 @@ response. The server module's _CLIENT_FACTORY seam injects the mock client.
 from __future__ import annotations
 
 import json
+import pathlib
 from typing import Callable
 
 import httpx
@@ -1295,3 +1296,594 @@ def test_translate_trait_uses_ensembl_id_when_available(install_handler):
     # their ensembl_id, not by the symbol.
     assert any("/AT4G33950" in p for p in seen), f"AT4G33950 not used; saw: {seen}"
     assert any("/AT5G52310" in p for p in seen), f"AT5G52310 not used; saw: {seen}"
+
+
+# ===========================================================================
+# Community-science layer
+#
+# These exercise the write path (phenotype ledger), cryptographic attribution,
+# GWAS power math, accession resolution, organellar queries, offline snapshots,
+# orphan-crop requests, and population-structure context. Network-touching
+# tools use the same MockTransport / client-factory seam as the read-only tools.
+# ===========================================================================
+
+def _grin_factory(handler):
+    def factory():
+        return httpx.Client(
+            base_url=server.GRIN_BASE_URL,
+            headers={"Accept": "application/json"},
+            transport=httpx.MockTransport(handler),
+            timeout=5,
+        )
+    return factory
+
+
+def _ipfs_factory(handler):
+    def factory():
+        return httpx.Client(
+            base_url=server.IPFS_API_URL,
+            transport=httpx.MockTransport(handler),
+            timeout=5,
+        )
+    return factory
+
+
+@pytest.fixture
+def ledger(tmp_path, monkeypatch):
+    """Point the ledger + snapshots at a tmp dir for the duration of a test."""
+    monkeypatch.setenv("CULTIVARS_LEDGER_DIR", str(tmp_path / "phenotypes"))
+    monkeypatch.setenv("CULTIVARS_SNAPSHOTS_DIR", str(tmp_path / "snapshots"))
+    return tmp_path
+
+
+# ---------------------------------------------------------------------------
+# submit_phenotype_observation
+# ---------------------------------------------------------------------------
+
+def test_submit_observation_writes_yaml(ledger):
+    out = server.submit_phenotype_observation(
+        accession_id="IRGC_12345",
+        common_name="Gobol Sail",
+        species="oryza_sativa",
+        trait_category="submergence_tolerance",
+        measurement_type="binary",
+        measurement_value=True,
+        measurement_protocol="14_day_submergence_field",
+        trait_atlas_gene="SUB1A",
+        agroecological_zone="south_asia_tropical_humid",
+        season="kharif_2026",
+    )
+    assert out["ok"] is True
+    assert out["validation"] == "passed"
+    assert out["written"] is True
+    assert out["content_hash"].startswith("sha256:")
+    path = pathlib.Path(out["path"])
+    assert path.exists()
+    text = path.read_text()
+    assert "oryza_sativa" in text
+    assert "ODbL-1.0" in text
+    # The canonical form must not contain the signature key (none here) and
+    # must be deterministic JSON.
+    assert "submergence_tolerance" in out["canonical_form"]
+
+
+def test_submit_observation_rejects_bad_trait(ledger):
+    out = server.submit_phenotype_observation(
+        accession_id="community:grandma_corn",
+        common_name="Hopi blue corn",
+        species="zea_mays",
+        trait_category="not_a_real_trait",
+        measurement_type="binary",
+        measurement_value=True,
+    )
+    assert out["ok"] is False
+    assert any("trait_category" in e for e in out["errors"])
+
+
+def test_submit_observation_rejects_bad_species(ledger):
+    out = server.submit_phenotype_observation(
+        accession_id="X1",
+        common_name="mystery",
+        species="tribblus_maximus",
+        trait_category="drought_tolerance",
+        measurement_type="binary",
+        measurement_value=True,
+    )
+    assert out["ok"] is False
+    assert any("species" in e for e in out["errors"])
+
+
+def test_submit_observation_binary_requires_bool(ledger):
+    out = server.submit_phenotype_observation(
+        accession_id="X1",
+        common_name="m",
+        species="oryza_sativa",
+        trait_category="drought_tolerance",
+        measurement_type="binary",
+        measurement_value="yes",
+    )
+    assert out["ok"] is False
+    assert any("boolean" in e for e in out["errors"])
+
+
+def test_submit_observation_continuous_requires_number(ledger):
+    out = server.submit_phenotype_observation(
+        accession_id="X1",
+        common_name="m",
+        species="oryza_sativa",
+        trait_category="plant_height_dwarfing",
+        measurement_type="continuous",
+        measurement_value="tall",
+    )
+    assert out["ok"] is False
+    assert any("numeric" in e for e in out["errors"])
+
+
+def test_submit_observation_informal_accession_suggests_resolve(ledger):
+    out = server.submit_phenotype_observation(
+        accession_id="community:hopi_blue",
+        common_name="Hopi blue corn",
+        species="zea_mays",
+        trait_category="drought_tolerance",
+        measurement_type="categorical",
+        measurement_value="survived",
+    )
+    assert out["ok"] is True
+    assert out["accession_suggestion"] is not None
+    assert "resolve_accession" in out["accession_suggestion"]
+
+
+def test_submit_observation_write_false_does_not_persist(ledger):
+    out = server.submit_phenotype_observation(
+        accession_id="GRIN:1",
+        common_name="x",
+        species="oryza_sativa",
+        trait_category="drought_tolerance",
+        measurement_type="binary",
+        measurement_value=False,
+        write=False,
+    )
+    assert out["ok"] is True
+    assert out["written"] is False
+    assert not (ledger / "phenotypes").exists()
+
+
+def test_submit_observation_rejects_wrong_atlas_gene(ledger):
+    out = server.submit_phenotype_observation(
+        accession_id="GRIN:1",
+        common_name="x",
+        species="oryza_sativa",
+        trait_category="submergence_tolerance",
+        measurement_type="binary",
+        measurement_value=True,
+        trait_atlas_gene="DREB1A",  # belongs to drought, not submergence
+    )
+    assert out["ok"] is False
+    assert any("trait_atlas_gene" in e for e in out["errors"])
+
+
+def test_submit_observation_sql_injection_is_path_safe(ledger):
+    out = server.submit_phenotype_observation(
+        accession_id="../../etc/passwd",
+        common_name="'; DROP TABLE x;--",
+        species="oryza_sativa",
+        trait_category="drought_tolerance",
+        measurement_type="binary",
+        measurement_value=True,
+    )
+    assert out["ok"] is True
+    path = pathlib.Path(out["path"])
+    # The written path must stay inside the ledger dir (no traversal).
+    ledger_root = (ledger / "phenotypes").resolve()
+    assert ledger_root in path.resolve().parents
+
+
+# ---------------------------------------------------------------------------
+# query_community_phenotypes
+# ---------------------------------------------------------------------------
+
+def test_query_community_phenotypes_empty(ledger):
+    out = server.query_community_phenotypes("drought_tolerance")
+    assert out["ok"] is True
+    assert out["observation_count"] == 0
+
+
+def test_query_community_phenotypes_aggregates(ledger):
+    # Distinct accessions (the realistic GWAS scenario — one obs per accession).
+    for i, val in enumerate((True, True, False)):
+        server.submit_phenotype_observation(
+            accession_id=f"GRIN:{i}",
+            common_name="x",
+            species="oryza_sativa",
+            trait_category="submergence_tolerance",
+            measurement_type="binary",
+            measurement_value=val,
+        )
+    out = server.query_community_phenotypes("submergence_tolerance", species="oryza_sativa")
+    assert out["ok"] is True
+    assert out["observation_count"] == 3
+    dist = out["measurement_distribution"]["categorical_or_binary"]
+    assert dist.get("True") == 2
+    assert dist.get("False") == 1
+
+
+def test_query_community_phenotypes_species_filter(ledger):
+    server.submit_phenotype_observation(
+        accession_id="A", common_name="x", species="oryza_sativa",
+        trait_category="drought_tolerance", measurement_type="binary",
+        measurement_value=True)
+    server.submit_phenotype_observation(
+        accession_id="B", common_name="y", species="zea_mays",
+        trait_category="drought_tolerance", measurement_type="binary",
+        measurement_value=True)
+    out = server.query_community_phenotypes("drought_tolerance", species="zea_mays")
+    assert out["observation_count"] == 1
+    assert out["accessions"] == ["B"]
+
+
+# ---------------------------------------------------------------------------
+# verify_observation_integrity (Ed25519)
+# ---------------------------------------------------------------------------
+
+def _make_signed_observation():
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    sk = Ed25519PrivateKey.generate()
+    pk = sk.public_key()
+    from cryptography.hazmat.primitives import serialization
+    pub_raw = pk.public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    pub_hex = "ed25519:" + pub_raw.hex()
+    obs = {
+        "schema_version": "1.0",
+        "accession_id": "IRGC_1",
+        "common_name": "x",
+        "species": "oryza_sativa",
+        "trait_category": "submergence_tolerance",
+        "measurement": {"type": "binary", "value": True, "unit": None, "protocol": None},
+        "provenance": {"submitter_pubkey": pub_hex, "signature": None,
+                       "location_proof": None, "ipfs_cid": None},
+        "license": "ODbL-1.0",
+        "submitted": "2026-05-28",
+    }
+    msg = server._canonical_observation_bytes(obs)
+    sig = sk.sign(msg)
+    obs["provenance"]["signature"] = sig.hex()
+    return obs, pub_hex
+
+
+def test_verify_observation_integrity_valid():
+    obs, pub_hex = _make_signed_observation()
+    content = server._yaml.safe_dump(obs)
+    out = server.verify_observation_integrity(content)
+    assert out["verified"] is True
+    assert out["submitter_pubkey"] == pub_hex
+
+
+def test_verify_observation_integrity_tampered():
+    obs, _ = _make_signed_observation()
+    obs["measurement"]["value"] = False  # tamper after signing
+    content = server._yaml.safe_dump(obs)
+    out = server.verify_observation_integrity(content)
+    assert out["verified"] is False
+    assert "altered" in out["error"] or "match" in out["error"]
+
+
+def test_verify_observation_integrity_unsigned():
+    obs, _ = _make_signed_observation()
+    obs["provenance"]["signature"] = None
+    content = server._yaml.safe_dump(obs)
+    out = server.verify_observation_integrity(content)
+    assert out["verified"] is False
+    assert "no signature" in out["error"]
+
+
+def test_verify_observation_integrity_bad_key():
+    obs, _ = _make_signed_observation()
+    content = server._yaml.safe_dump(obs)
+    out = server.verify_observation_integrity(content, pubkey="ed25519:not-hex-zz")
+    assert out["verified"] is False
+
+
+def test_verify_observation_integrity_garbage_input():
+    out = server.verify_observation_integrity("}{ not yaml at all : : :")
+    assert out["verified"] is False
+
+
+def test_submit_then_verify_roundtrip_via_file(ledger):
+    # End-to-end: an externally-signed observation written through the ledger
+    # round-trips through verification from its file path.
+    obs, pub_hex = _make_signed_observation()
+    # write it to the ledger dir manually to simulate a submitted, signed file
+    p = ledger / "obs.yaml"
+    p.write_text(server._yaml.safe_dump(obs))
+    out = server.verify_observation_integrity(str(p))
+    assert out["verified"] is True
+
+
+# ---------------------------------------------------------------------------
+# estimate_gwas_power
+# ---------------------------------------------------------------------------
+
+def test_estimate_gwas_power_basic():
+    out = server.estimate_gwas_power("submergence_tolerance", "oryza_sativa", n_observations=12)
+    assert out["ok"] is True
+    assert out["current_observations"] == 12
+    n_large = out["required_observations"]["large_effect_locus"]["n"]
+    n_medium = out["required_observations"]["medium_effect_locus"]["n"]
+    # Medium-effect loci always need more samples than large-effect.
+    assert n_medium > n_large
+    assert "recruit" in out["interpretation"]["large_effect"]
+
+
+def test_estimate_gwas_power_pulls_from_ledger(ledger):
+    server.submit_phenotype_observation(
+        accession_id="A", common_name="x", species="oryza_sativa",
+        trait_category="submergence_tolerance", measurement_type="binary",
+        measurement_value=True)
+    out = server.estimate_gwas_power("submergence_tolerance", "oryza_sativa")
+    assert out["current_observations"] == 1
+    assert out["current_observations_source"] == "community_ledger"
+
+
+def test_estimate_gwas_power_conservative_for_unknown_species():
+    out = server.estimate_gwas_power("drought_tolerance", "manihot_esculenta", n_observations=0)
+    assert out["assumptions"]["conservative_snp_estimate"] is True
+
+
+def test_estimate_gwas_power_bad_maf():
+    out = server.estimate_gwas_power("drought_tolerance", "oryza_sativa", maf=0.9)
+    assert out["ok"] is False
+
+
+def test_estimate_gwas_power_unknown_trait():
+    out = server.estimate_gwas_power("nope", "oryza_sativa")
+    assert out["ok"] is False
+
+
+def test_inv_norm_cdf_known_values():
+    assert abs(server._inv_norm_cdf(0.975) - 1.959964) < 1e-3
+    assert abs(server._inv_norm_cdf(0.5)) < 1e-6
+    assert abs(server._inv_norm_cdf(0.80) - 0.841621) < 1e-3
+
+
+def test_wright_fst_monomorphic_is_zero():
+    assert server._wright_fst(0.0, 0.0) == 0.0
+    # Maximal differentiation -> Fst 1.0
+    assert server._wright_fst(0.0, 1.0) == 1.0
+
+
+# ---------------------------------------------------------------------------
+# resolve_accession (GRIN-Global)
+# ---------------------------------------------------------------------------
+
+def test_resolve_accession_parses_list(monkeypatch):
+    def handler(req):
+        assert "/search/accessions" in req.url.path
+        return _json([
+            {"accessionId": "PI 614788", "commonName": "Hopi blue",
+             "taxon": "Zea mays", "origin": "United States"},
+        ])
+    monkeypatch.setattr(server, "_grin_client", _grin_factory(handler))
+    out = server.resolve_accession("Hopi blue corn")
+    assert out["ok"] is True
+    assert out["match_count"] == 1
+    m = out["matches"][0]
+    assert m["accession_id"] == "PI 614788"
+    assert m["ensembl_species"] == "zea_mays"
+
+
+def test_resolve_accession_parses_wrapped_dict(monkeypatch):
+    def handler(req):
+        return _json({"data": [{"accenumb": "IRGC 12345", "taxon": "Oryza sativa"}]})
+    monkeypatch.setattr(server, "_grin_client", _grin_factory(handler))
+    out = server.resolve_accession("Gobol Sail")
+    assert out["match_count"] == 1
+    assert out["matches"][0]["ensembl_species"] == "oryza_sativa"
+
+
+def test_resolve_accession_empty_query():
+    out = server.resolve_accession("")
+    assert out["ok"] is False
+
+
+def test_resolve_accession_404(monkeypatch):
+    def handler(req):
+        return httpx.Response(404)
+    monkeypatch.setattr(server, "_grin_client", _grin_factory(handler))
+    out = server.resolve_accession("nonexistent landrace")
+    assert out["ok"] is True
+    assert out["match_count"] == 0
+
+
+def test_resolve_accession_http_error(monkeypatch):
+    def handler(req):
+        raise httpx.ConnectError("boom")
+    monkeypatch.setattr(server, "_grin_client", _grin_factory(handler))
+    out = server.resolve_accession("x")
+    assert out["ok"] is False
+    assert "fallback" in out
+
+
+# ---------------------------------------------------------------------------
+# query_organellar_variants
+# ---------------------------------------------------------------------------
+
+def test_organellar_trait_context_only():
+    out = server.query_organellar_variants("oryza_sativa", organelle="mitochondrion", trait="cms")
+    assert out["ok"] is True
+    assert out["chromosome"] == "Mt"
+    assert out["trait_context"]["trait"] == "cms"
+    assert "variant_scan" not in out
+    assert "variant_scan_hint" in out
+
+
+def test_organellar_alias_chloroplast():
+    out = server.query_organellar_variants("arabidopsis_thaliana", organelle="chloroplast")
+    assert out["chromosome"] == "Pt"
+    assert out["organelle"] == "plastid"
+
+
+def test_organellar_bad_organelle():
+    out = server.query_organellar_variants("oryza_sativa", organelle="nucleus")
+    assert out["ok"] is False
+
+
+def test_organellar_trait_mismatch_warning():
+    # cms is a mitochondrial trait; querying it as plastid should warn.
+    out = server.query_organellar_variants("oryza_sativa", organelle="plastid", trait="cms")
+    assert "trait_warning" in out
+
+
+def test_organellar_region_scan(install_handler):
+    def handler(req):
+        assert "/overlap/region/oryza_sativa/Pt:1-5000" in req.url.path
+        return _json([{"id": "v1", "seq_region_name": "Pt", "start": 100, "end": 100,
+                       "alleles": ["A", "G"], "consequence_type": "synonymous_variant"}])
+    install_handler(handler)
+    out = server.query_organellar_variants("oryza_sativa", organelle="plastid", region="1-5000")
+    assert out["variant_scan"]["count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# export_offline_snapshot
+# ---------------------------------------------------------------------------
+
+def test_export_offline_snapshot_atlas_only(ledger):
+    out = server.export_offline_snapshot("drought_tolerance", "sorghum_bicolor",
+                                         include_orthologs=False)
+    assert out["ok"] is True
+    p = pathlib.Path(out["path"])
+    assert p.exists()
+    blob = json.loads(p.read_text())
+    assert blob["trait_category"] == "drought_tolerance"
+    assert blob["orthologs_included"] is False
+    assert blob["atlas"]["genes"]
+
+
+def test_export_offline_snapshot_unknown_trait(ledger):
+    out = server.export_offline_snapshot("nope", "oryza_sativa", include_orthologs=False)
+    assert out["ok"] is False
+
+
+def test_export_offline_snapshot_with_orthologs(ledger, install_handler):
+    def handler(req):
+        return _json({"data": [{"id": "X", "homologies": []}]})
+    install_handler(handler)
+    out = server.export_offline_snapshot("salt_tolerance", "sorghum_bicolor",
+                                         include_orthologs=True, max_genes=1)
+    assert out["ok"] is True
+    blob = json.loads(pathlib.Path(out["path"]).read_text())
+    assert "orthologs" in blob
+
+
+# ---------------------------------------------------------------------------
+# list_orphan_crop_requests
+# ---------------------------------------------------------------------------
+
+def test_list_orphan_crop_requests():
+    out = server.list_orphan_crop_requests()
+    assert out["ok"] is True
+    assert out["request_count"] >= 1
+    ids = {r["id"] for r in out["requests"]}
+    assert "fonio_photoperiod_sensitivity" in ids
+
+
+def test_submit_observation_accepts_orphan_crop_species(ledger):
+    # Orphan-crop species aren't in Ensembl Plants but appear in the atlas, so
+    # a teff grower must still be able to contribute (mission-critical).
+    out = server.submit_phenotype_observation(
+        accession_id="community:ethiopian_teff",
+        common_name="Ethiopian brown teff",
+        species="eragrostis_tef",
+        trait_category="teff_drought_tolerance",
+        measurement_type="binary",
+        measurement_value=True,
+    )
+    assert out["ok"] is True
+    assert out["written"] is True
+
+
+def test_orphan_crops_in_atlas():
+    assert "teff_drought_tolerance" in server.TRAIT_ATLAS
+    assert "cowpea_heat_tolerance" in server.TRAIT_ATLAS
+    out = server.find_trait_genes("amaranth_c4_photosynthesis")
+    assert out["trait"] == "amaranth_c4_photosynthesis"
+    assert any(g["symbol"] == "AhPEPC" for g in out["genes"])
+
+
+# ---------------------------------------------------------------------------
+# population_context
+# ---------------------------------------------------------------------------
+
+def test_get_variant_population_context_richly_covered(install_handler):
+    def handler(req):
+        assert req.url.params.get("pops") == "1"
+        return _json({
+            "name": "v1", "var_class": "SNP", "minor_allele": "A", "MAF": 0.3,
+            "mappings": [{"location": "1:1-1", "seq_region_name": "1"}],
+            "populations": [
+                {"population": "3K_Rice:Indica", "allele": "A", "frequency": 0.8},
+                {"population": "3K_Rice:Japonica", "allele": "A", "frequency": 0.05},
+            ],
+        })
+    install_handler(handler)
+    out = server.get_variant("v1", species="oryza_sativa", population_context=True)
+    pc = out["population_context"]
+    assert pc["available"] is True
+    assert pc["fst"]["estimate"] > 0.3
+    assert "differentiation" in pc["population_note"]
+
+
+def test_get_variant_population_context_unavailable_for_sparse_species(install_handler):
+    def handler(req):
+        # pops should NOT be requested for a gene_models_only species
+        assert "pops" not in req.url.params
+        return _json({"name": "v1", "mappings": []})
+    install_handler(handler)
+    out = server.get_variant("v1", species="manihot_esculenta", population_context=True)
+    assert out["population_context"]["available"] is False
+
+
+def test_search_variants_population_context_hint(install_handler):
+    def handler(req):
+        return _json([{"id": "v1", "seq_region_name": "1", "start": 1, "end": 1}])
+    install_handler(handler)
+    out = server.search_variants_in_region("1:1-100", species="oryza_sativa",
+                                            population_context=True)
+    assert "population_context_hint" in out
+
+
+# ---------------------------------------------------------------------------
+# pin_observation_to_ipfs
+# ---------------------------------------------------------------------------
+
+def test_pin_to_ipfs_fallback_when_unreachable(ledger, monkeypatch):
+    obs_path = ledger / "o.yaml"
+    obs_path.write_text("schema_version: '1.0'\nprovenance: {}\n")
+
+    def handler(req):
+        raise httpx.ConnectError("no daemon")
+    monkeypatch.setattr(server, "_ipfs_client", _ipfs_factory(handler))
+    out = server.pin_observation_to_ipfs(str(obs_path))
+    assert out["ok"] is False
+    assert out["fallback"] is True
+    assert out["ipfs_available"] is False
+
+
+def test_pin_to_ipfs_success_writes_cid(ledger, monkeypatch):
+    obs_path = ledger / "o.yaml"
+    obs_path.write_text("schema_version: '1.0'\nprovenance: {}\n")
+
+    def handler(req):
+        return httpx.Response(200, text='{"Name":"o.yaml","Hash":"bafytestcid"}')
+    monkeypatch.setattr(server, "_ipfs_client", _ipfs_factory(handler))
+    out = server.pin_observation_to_ipfs(str(obs_path))
+    assert out["ok"] is True
+    assert out["observation_cid"] == "bafytestcid"
+    assert out["wrote_cid_to_yaml"] is True
+    assert "bafytestcid" in obs_path.read_text()
+
+
+def test_pin_to_ipfs_missing_file():
+    out = server.pin_observation_to_ipfs("/nonexistent/path.yaml")
+    assert out["ok"] is False

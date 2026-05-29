@@ -32,7 +32,12 @@ does not replace them.
 """
 
 import concurrent.futures
+import copy
+import datetime
+import hashlib
 import json
+import math
+import os
 import pathlib
 import random
 import re
@@ -40,6 +45,16 @@ import time
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+
+# PyYAML backs the phenotype ledger (human-readable, machine-parseable
+# observation files). It is a declared dependency, but the import is guarded
+# so the genomics tools keep working even in a stripped-down environment that
+# lacks it — the ledger tools degrade to a structured "install pyyaml" notice
+# rather than crashing the whole server at import time.
+try:
+    import yaml as _yaml
+except ImportError:  # pragma: no cover - exercised only without the dep
+    _yaml = None
 
 # Medicinal Genomics Kannapedia — public cannabis strain database
 # (https://www.kannapedia.net/). Strain pages live at the canonical URL
@@ -580,6 +595,53 @@ TRAIT_ATLAS = {
             {"symbol": "RBCS1A", "alias": "RBCS / Rubisco small subunit", "ensembl_id": "AT1G67090", "characterized_in": "arabidopsis_thaliana", "function": "Rubisco small subunit — the universal carboxylase that both C3 and C4 plants depend on; included for orientation, kinetics differ between C3 and C4 lineages."},
         ],
     },
+    # --- Orphan crops -------------------------------------------------------
+    # Crops that feed resource-limited farmers but are underrepresented in
+    # model-system-funded genomics. Seed entries; see WANTED_TRAITS.yaml and
+    # CONTRIBUTING.md '# ORPHAN CROPS BOUNTY' for how to extend. Genes here are
+    # literature handles — most of these species are not in Ensembl Plants, so
+    # use the cited references + UniProt/NCBI search rather than expecting
+    # symbol resolution.
+    "teff_drought_tolerance": {
+        "description": "Drought-response transcription factors in teff (Eragrostis tef), an Ethiopian C4 cereal prized for waterlogging/drought resilience and gluten-free grain.",
+        "natural_farming_relevance": "Teff is a climate-resilient staple for Horn-of-Africa smallholders, grown on marginal rain-fed plots. DREB/NAC regulons underlie its drought escape and avoidance.",
+        "genes": [
+            {"symbol": "EtDREB2", "alias": "EtDREB family", "characterized_in": "eragrostis_tef", "function": "Dehydration-responsive element-binding TF family; activates the osmotic-stress regulon under water deficit.", "note": "Orphan-crop literature handle — Eragrostis tef is not in Ensembl Plants.", "evidence_level": "sequence_similarity_only"},
+            {"symbol": "EtNAC", "alias": "EtNAC stress TFs", "characterized_in": "eragrostis_tef", "function": "NAC-domain transcription factors implicated in teff drought and senescence response.", "note": "Orphan-crop literature handle.", "evidence_level": "sequence_similarity_only"},
+        ],
+    },
+    "cowpea_heat_tolerance": {
+        "description": "Heat-shock machinery in cowpea (Vigna unguiculata), a drought- and heat-tolerant legume central to Sahelian food and soil-nitrogen systems.",
+        "natural_farming_relevance": "Cowpea fixes nitrogen and tolerates extreme heat; reproductive-stage heat tolerance (pollen viability) is the key smallholder yield-protection trait under warming.",
+        "genes": [
+            {"symbol": "VuHSP70", "alias": "VuHsp70", "characterized_in": "vigna_unguiculata", "function": "Heat-shock protein 70 chaperone; refolds heat-denatured proteins to protect reproductive tissue.", "note": "Orphan-crop literature handle — use NCBI/UniProt search.", "evidence_level": "biochemical_activity"},
+            {"symbol": "VuHSFA2", "alias": "VuHsfA2", "characterized_in": "vigna_unguiculata", "function": "Heat-shock transcription factor A2; sustains the heat-stress response after the initial HsfA1 spike.", "note": "Orphan-crop literature handle.", "evidence_level": "sequence_similarity_only"},
+        ],
+    },
+    "finger_millet_calcium_accumulation": {
+        "description": "Seed calcium transport in finger millet (Eleusine coracana), the most calcium-rich cereal grain — a nutritional cornerstone for South Asian and East African smallholders.",
+        "natural_farming_relevance": "Finger millet's exceptional seed calcium addresses dietary calcium deficiency without supplements; CAX transporters control grain calcium loading.",
+        "genes": [
+            {"symbol": "EcCAX1", "alias": "Ca2+/H+ exchanger 1", "characterized_in": "eleusine_coracana", "function": "Vacuolar calcium/proton antiporter; candidate for the high seed-calcium phenotype.", "note": "Orphan-crop literature handle — Eleusine coracana not in Ensembl Plants.", "evidence_level": "sequence_similarity_only"},
+            {"symbol": "EcCIPK", "alias": "CBL-interacting kinase", "characterized_in": "eleusine_coracana", "function": "Calcium-signalling kinase implicated in finger-millet calcium and stress signalling.", "note": "Orphan-crop literature handle.", "evidence_level": "sequence_similarity_only"},
+        ],
+    },
+    "pigeon_pea_salinity_tolerance": {
+        "description": "Salt-exclusion machinery in pigeon pea (Cajanus cajan), a deep-rooted perennial legume for semi-arid intercropping.",
+        "natural_farming_relevance": "Pigeon pea's deep roots and N-fixation rehabilitate degraded and saline-prone soils; SOS-pathway and NHX antiporters underlie its salt tolerance.",
+        "genes": [
+            {"symbol": "CcSOS1", "characterized_in": "cajanus_cajan", "function": "Plasma-membrane Na+/H+ antiporter; root-tip sodium extrusion (SOS-pathway ortholog).", "note": "Orphan-crop literature handle — Cajanus cajan genome published (Varshney 2012) but not in Ensembl Plants.", "evidence_level": "sequence_similarity_only"},
+            {"symbol": "CcNHX1", "characterized_in": "cajanus_cajan", "function": "Vacuolar Na+/H+ antiporter; sequesters cytotoxic sodium into the vacuole.", "note": "Orphan-crop literature handle.", "evidence_level": "sequence_similarity_only"},
+        ],
+    },
+    "amaranth_c4_photosynthesis": {
+        "description": "C4 carbon-fixation enzymes in grain amaranth (Amaranthus spp.), a highly nutritious pseudo-cereal with C4 photosynthesis and exceptional heat/drought efficiency.",
+        "natural_farming_relevance": "Amaranth combines C4 water/N-use efficiency with high-lysine grain and edible leaves — a resilient smallholder crop across the Americas, Africa, and South Asia.",
+        "genes": [
+            {"symbol": "AhPEPC", "alias": "PEPC / PPC", "characterized_in": "amaranthus_hypochondriacus", "function": "Phosphoenolpyruvate carboxylase; the primary CO2-fixing enzyme of C4 photosynthesis in mesophyll cells.", "note": "Orphan-crop literature handle — Amaranthus genome assembled (Lightfoot 2017) but not in Ensembl Plants.", "evidence_level": "biochemical_activity"},
+            {"symbol": "AhNADP-ME", "alias": "NADP-malic enzyme", "characterized_in": "amaranthus_hypochondriacus", "function": "NADP-malic enzyme; decarboxylates malate in bundle-sheath cells to release CO2 to Rubisco.", "note": "Orphan-crop literature handle.", "evidence_level": "sequence_similarity_only"},
+        ],
+    },
 }
 
 
@@ -854,11 +916,78 @@ def lookup_gene(gene: str, species: str | None = None, expand: bool = False) -> 
     }
 
 
+# Named subpopulation pairs used for a coarse Fst sketch when frequency data
+# for both is present in an Ensembl variation record.
+_FST_SUBPOP_HINTS = {
+    "oryza_sativa": ("Indica", "Japonica"),
+    "oryza_indica": ("Indica", "Japonica"),
+}
+
+
+def _wright_fst(p1: float, p2: float) -> float:
+    """Wright's Fst for a biallelic locus between two equally-weighted subpops.
+
+    p1, p2 = focal-allele frequency in each subpopulation. Fst = (Ht - Hs) / Ht,
+    where Hs is the mean within-subpop heterozygosity and Ht the total.
+    """
+    p_bar = (p1 + p2) / 2
+    h_t = 2 * p_bar * (1 - p_bar)
+    if h_t == 0:
+        return 0.0
+    h_s = (p1 * (1 - p1) + p2 * (1 - p2)) / 2
+    return round((h_t - h_s) / h_t, 4)
+
+
+def _population_context(species: str, data: dict) -> dict:
+    """Summarise population allele frequencies (and a coarse Fst) from an
+    Ensembl variation record fetched with pops=1. Honest about gaps."""
+    pops = data.get("populations") or []
+    if not pops:
+        return {"available": False, "note": "No population frequency data for this variant."}
+    per_pop = [
+        {
+            "population": p.get("population"),
+            "allele": p.get("allele"),
+            "frequency": p.get("frequency"),
+            "allele_count": p.get("allele_count"),
+        }
+        for p in pops
+    ]
+    result: dict = {"available": True, "global_maf": data.get("MAF"), "per_population": per_pop}
+
+    sub = _FST_SUBPOP_HINTS.get(species)
+    if sub:
+        minor = data.get("minor_allele")
+        freqs: dict[str, float] = {}
+        for p in pops:
+            if minor is not None and p.get("allele") != minor:
+                continue
+            name = p.get("population") or ""
+            for label in sub:
+                if label.lower() in name.lower() and isinstance(p.get("frequency"), (int, float)):
+                    freqs[label] = float(p["frequency"])
+        if len(freqs) == 2:
+            fst = _wright_fst(freqs[sub[0]], freqs[sub[1]])
+            result["fst"] = {"subpopulations": list(sub), "estimate": fst, "frequencies": freqs}
+            if fst > 0.3:
+                result["population_note"] = (
+                    f"This allele shows strong population differentiation (Fst {fst} > 0.3) "
+                    f"between {sub[0]} and {sub[1]} subpopulations — likely a target of "
+                    "selection or a breeding bottleneck."
+                )
+            else:
+                result["population_note"] = (
+                    f"Modest differentiation (Fst {fst}) between {sub[0]} and {sub[1]} subpopulations."
+                )
+    return result
+
+
 @mcp.tool()
 def search_variants_in_region(
     region: str,
     species: str | None = None,
     limit: int = 25,
+    population_context: bool = False,
 ) -> dict:
     """List known variants overlapping a genomic region.
 
@@ -876,6 +1005,11 @@ def search_variants_in_region(
         limit: Maximum variants to return (default 25, max 200). The
                Ensembl API itself caps overlap responses; this is a
                client-side truncation.
+        population_context: If True, adds guidance for retrieving per-population
+               allele frequencies + Fst. Region overlap does not carry
+               population frequencies, so this surfaces a pointer to call
+               get_variant(variant_id, population_context=True) per variant of
+               interest rather than fanning out N requests (rate-limit hygiene).
     """
     species = _normalize_species(species)
     r = (region or "").strip()
@@ -911,7 +1045,7 @@ def search_variants_in_region(
     truncated = len(variants) > limit
     variants = variants[:limit]
 
-    return {
+    result = {
         "region": r,
         "species": species,
         "species_quality": _species_quality(species),
@@ -934,9 +1068,33 @@ def search_variants_in_region(
         ],
     }
 
+    if population_context:
+        tier = _species_quality(species).get("tier")
+        if tier == "richly_covered":
+            result["population_context_hint"] = (
+                "For per-population allele frequencies and Fst, call "
+                "get_variant(variant_id, species, population_context=True) on a "
+                "specific variant above. Fanning out frequency lookups for every "
+                "variant in a region is avoided here to respect Ensembl rate limits."
+            )
+        else:
+            result["population_context"] = {
+                "available": False,
+                "note": (
+                    f"Population allele-frequency data is only available for "
+                    f"richly-covered species; {species} is tier '{tier}'."
+                ),
+            }
+
+    return result
+
 
 @mcp.tool()
-def get_variant(variant_id: str, species: str | None = None) -> dict:
+def get_variant(
+    variant_id: str,
+    species: str | None = None,
+    population_context: bool = False,
+) -> dict:
     """Get full information for a known plant variant by stable ID.
 
     Args:
@@ -946,6 +1104,11 @@ def get_variant(variant_id: str, species: str | None = None) -> dict:
         species: Ensembl species name (default 'arabidopsis_thaliana').
                  Must match the species whose variation database holds the
                  ID; Ensembl variant IDs are not unique across species.
+        population_context: If True, fetch per-population allele frequencies
+                 (1001 Genomes / 3K Rice Genomes etc.) and, where two named
+                 subpopulations are present (e.g. Indica/Japonica for rice),
+                 a coarse Wright's Fst. Only meaningful for richly-covered
+                 species; otherwise returns a structured explanation.
     """
     species = _normalize_species(species)
     vid = (variant_id or "").strip()
@@ -956,8 +1119,11 @@ def get_variant(variant_id: str, species: str | None = None) -> dict:
     if fallback:
         return fallback
 
+    want_pops = population_context and _species_quality(species).get("tier") == "richly_covered"
+    params = {"pops": 1} if want_pops else None
+
     with _get_client() as client:
-        resp = _get_with_retry(client, f"/variation/{species}/{vid}")
+        resp = _get_with_retry(client, f"/variation/{species}/{vid}", params=params)
         if resp.status_code == 404:
             return {
                 "error": "Variant not found",
@@ -967,7 +1133,7 @@ def get_variant(variant_id: str, species: str | None = None) -> dict:
         resp.raise_for_status()
         data = resp.json()
 
-    return {
+    variant_result = {
         "variant_id": data.get("name") or vid,
         "ensembl_url": _ensembl_variant_url(species, data.get("name") or vid),
         "species": species,
@@ -994,6 +1160,21 @@ def get_variant(variant_id: str, species: str | None = None) -> dict:
             for m in (data.get("mappings") or [])
         ],
     }
+
+    if population_context:
+        if want_pops:
+            variant_result["population_context"] = _population_context(species, data)
+        else:
+            variant_result["population_context"] = {
+                "available": False,
+                "note": (
+                    f"Population allele-frequency data is only available for "
+                    f"richly-covered species; {species} is tier "
+                    f"'{_species_quality(species).get('tier')}'."
+                ),
+            }
+
+    return variant_result
 
 
 @mcp.tool()
@@ -2256,6 +2437,13 @@ def find_trait_genes(trait: str, target_species: str | None = None) -> dict:
     # Loose match: any trait whose key contains the input
     if not entry:
         candidates = [k for k in TRAIT_ATLAS if t in k]
+        # Tiebreak: if multiple keys contain the query but exactly one *starts*
+        # with it, prefer that. Keeps 'drought' -> 'drought_tolerance' even
+        # after orphan-crop keys like 'teff_drought_tolerance' were added.
+        if len(candidates) > 1:
+            prefix_matches = [k for k in candidates if k.startswith(t)]
+            if len(prefix_matches) == 1:
+                candidates = prefix_matches
         if len(candidates) == 1:
             matched_key = candidates[0]
             entry = TRAIT_ATLAS[matched_key]
@@ -2432,6 +2620,1263 @@ def translate_trait_to_species(trait: str, target_species: str, max_genes: int |
             "literature handles flagged in the atlas), or the homology call "
             "doesn't exist in Ensembl Compara for the target species."
         ),
+    }
+
+
+# ===========================================================================
+# COMMUNITY SCIENCE LAYER
+#
+# Everything above this line is read-only: it queries open genomics databases
+# and a curated trait atlas. The tools below add the *write* path and the
+# scaffolding around it — the participatory-science instrument described in
+# the Copyleft Cultivars upgrade brief:
+#
+#   - submit_phenotype_observation / query_community_phenotypes  (ledger)
+#   - verify_observation_integrity                               (Ed25519 attribution)
+#   - pin_observation_to_ipfs                                    (content addressing)
+#   - estimate_gwas_power                                        (individual -> collective)
+#   - resolve_accession                                          (folk name -> formal ID)
+#   - query_organellar_variants                                  (Mt/Pt genomes)
+#   - export_offline_snapshot                                    (online -> TinyLLamaFarmer)
+#   - list_orphan_crop_requests                                  (contribution pipeline)
+#
+# Design discipline carried over from the read-only layer: honest framing
+# (surface limits and provenance), structured responses instead of uncaught
+# exceptions, no auth required at runtime, and the test seam pattern
+# (`_*_client()` factories) for anything that touches the network.
+# ===========================================================================
+
+# Data the ledger is licensed under. The CODE is Apache-2.0 (see LICENSE);
+# the community-contributed DATA is ODbL-1.0 (see DATA_LICENSE.md) so that
+# derivative databases must stay open — preventing biotech enclosure of the
+# commons the way a permissive code license on data would allow.
+LEDGER_SCHEMA_VERSION = "1.0"
+LEDGER_DATA_LICENSE = "ODbL-1.0"
+_VALID_MEASUREMENT_TYPES = {"binary", "continuous", "categorical"}
+
+# GRIN-Global (USDA ARS) REST service — bridges farmer seed names to formal
+# accession IDs across 600,000+ holdings. Free, no-auth.
+GRIN_BASE_URL = "https://npgsweb.ars-grin.gov/gringlobal/rest"
+
+# kubo (go-ipfs) HTTP API. Localhost by default; overridable for a remote
+# pinning gateway. The pinning tool degrades gracefully when this is down.
+IPFS_API_URL = os.environ.get("CULTIVARS_IPFS_API", "http://127.0.0.1:5001")
+
+
+def _ledger_dir() -> pathlib.Path:
+    """Directory the phenotype ledger is written to / read from.
+
+    Configurable via CULTIVARS_LEDGER_DIR so a deployment can point the ledger
+    at a git working copy (for PR-based submission) or a shared volume.
+    Defaults to ./phenotypes relative to the process CWD.
+    """
+    return pathlib.Path(
+        os.environ.get("CULTIVARS_LEDGER_DIR") or (pathlib.Path.cwd() / "phenotypes")
+    )
+
+
+def _snapshots_dir() -> pathlib.Path:
+    """Directory the offline-bridge snapshots are written to."""
+    return pathlib.Path(
+        os.environ.get("CULTIVARS_SNAPSHOTS_DIR") or (pathlib.Path.cwd() / "snapshots")
+    )
+
+
+def _data_dir() -> pathlib.Path:
+    """Repo-local data directory (WANTED_TRAITS.yaml etc.)."""
+    return pathlib.Path(__file__).parent
+
+
+_PATH_SAFE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+
+
+def _path_safe(value: str) -> str:
+    """Collapse anything that isn't a safe filename character to '_'.
+
+    Defends the ledger directory against path traversal in the user-supplied
+    accession_id / species / trait that become path components.
+    """
+    cleaned = _PATH_SAFE_RE.sub("_", (value or "").strip())
+    return cleaned.strip("._") or "unknown"
+
+
+def _known_species() -> set[str]:
+    """Species we recognise for ledger submission.
+
+    The quality table + the community-gap list + every species named in the
+    trait atlases. The last group matters for the mission: orphan-crop species
+    (teff, cowpea, pigeon pea, …) appear as atlas `characterized_in` values but
+    are NOT in Ensembl Plants — a teff grower must still be able to submit a
+    teff observation, so atlas-referenced species count as known.
+    """
+    known = set(_SPECIES_QUALITY) | set(COMMUNITY_RESOURCES)
+    for entry in TRAIT_ATLAS.values():
+        for gene in entry.get("genes", []):
+            sp = gene.get("characterized_in")
+            if sp:
+                known.add(sp)
+    for entry in ORGANELLAR_TRAITS.values():
+        for gene in entry.get("genes", []):
+            sp = gene.get("characterized_in")
+            if sp:
+                known.add(sp)
+    return known
+
+
+def _valid_trait_category(trait: str) -> bool:
+    return trait in TRAIT_ATLAS or trait in ORGANELLAR_TRAITS
+
+
+def _canonical_observation_bytes(obs: dict) -> bytes:
+    """Deterministic bytes for signing/verifying an observation.
+
+    Canonical form = JSON, sorted keys, compact separators, with the volatile
+    `provenance.signature` field removed (you cannot sign a document that
+    contains its own signature). Both the signer and the verifier MUST derive
+    the bytes the same way; JSON-with-sorted-keys is used rather than YAML
+    because YAML serialisation is not canonical across emitters.
+    """
+    clean = copy.deepcopy(obs)
+    prov = clean.get("provenance")
+    if isinstance(prov, dict):
+        prov.pop("signature", None)
+    return json.dumps(
+        clean, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+
+
+def _content_hash(obs: dict) -> str:
+    """SHA-256 over the canonical observation bytes (tamper-evidence handle)."""
+    return "sha256:" + hashlib.sha256(_canonical_observation_bytes(obs)).hexdigest()
+
+
+def _decode_key_material(value: str) -> bytes:
+    """Decode hex or base64 key/signature material, tolerating a type prefix.
+
+    Accepts 'ed25519:<hex>', a bare hex string, or base64. Raises ValueError
+    on anything undecodable so callers can return a structured error.
+    """
+    import base64
+
+    raw = (value or "").strip()
+    if ":" in raw and raw.split(":", 1)[0].lower() in {"ed25519", "hex", "base64"}:
+        raw = raw.split(":", 1)[1]
+    raw = raw.strip()
+    # Try hex first (Ed25519 keys/sigs are 32/64 bytes -> 64/128 hex chars).
+    try:
+        return bytes.fromhex(raw)
+    except ValueError:
+        pass
+    try:
+        return base64.b64decode(raw, validate=True)
+    except Exception as exc:  # noqa: BLE001 - normalise to ValueError
+        raise ValueError(f"could not decode key material: {exc}") from exc
+
+
+# ---------------------------------------------------------------------------
+# Organellar genome mini-atlas (mitochondrion / plastid)
+#
+# Mt and Pt are first-class chromosome identifiers in Ensembl Plants, not
+# errors. These traits are politically significant for the seed-sovereignty
+# audience: CMS is how hybrid seed is produced; plastid herbicide resistance
+# is how Roundup-/atrazine-resistant traits spread maternally.
+# ---------------------------------------------------------------------------
+ORGANELLAR_TRAITS = {
+    "cms": {
+        "organelle": "mitochondrion",
+        "chromosome": "Mt",
+        "description": "Cytoplasmic male sterility — maternally inherited mitochondrial rearrangements that abort pollen. The genetic basis of most hybrid-seed production systems.",
+        "natural_farming_relevance": "CMS is the mechanism by which commercial hybrids are made non-true-breeding, tying growers to seed repurchase. Understanding the loci helps heritage breeders identify and avoid (or deliberately use) CMS cytoplasms.",
+        "genes": [
+            {"symbol": "orf138", "function": "Ogura (radish) CMS-associated chimeric ORF; restored by the Rfo nuclear gene (PPR protein).", "characterized_in": "raphanus_sativus"},
+            {"symbol": "orf256", "function": "Wheat/maize T-CMS-associated mitochondrial ORF.", "characterized_in": "zea_mays"},
+            {"symbol": "T-urf13", "alias": "urf13", "function": "Maize CMS-T chimeric ORF; the cytoplasm behind the 1970 Southern corn leaf blight epidemic — a cautionary monoculture lesson.", "characterized_in": "zea_mays"},
+            {"symbol": "atp6", "function": "Mitochondrial ATP synthase subunit 6; recurrent participant in CMS-associated rearrangements.", "characterized_in": "oryza_sativa"},
+        ],
+    },
+    "plastid_herbicide_resistance": {
+        "organelle": "plastid",
+        "chromosome": "Pt",
+        "description": "Plastid-encoded targets of herbicides; maternally inherited resistance alleles.",
+        "natural_farming_relevance": "psbA point mutations confer atrazine/triazine and DCMU resistance and spread maternally through seed, not pollen — relevant to weed-management and to understanding GM-trait inheritance in seed-saving systems.",
+        "genes": [
+            {"symbol": "psbA", "function": "D1 protein of photosystem II; the Ser264 target site of triazine (atrazine) and urea (DCMU) herbicides. Point mutations confer resistance.", "characterized_in": "arabidopsis_thaliana"},
+            {"symbol": "accD", "function": "Plastid acetyl-CoA carboxylase beta subunit; target context for graminicide (ACCase-inhibitor) resistance.", "characterized_in": "arabidopsis_thaliana"},
+        ],
+    },
+    "plastid_photosynthesis": {
+        "organelle": "plastid",
+        "chromosome": "Pt",
+        "description": "Core plastid-encoded photosynthetic machinery — Rubisco large subunit and photosystem reaction-centre proteins.",
+        "natural_farming_relevance": "rbcL is the universal plant DNA-barcode locus and the large subunit of Rubisco; plastid photosynthesis genes anchor maternal-lineage identification of heritage seed.",
+        "genes": [
+            {"symbol": "rbcL", "function": "Rubisco large subunit — the carboxylase at the heart of carbon fixation; also the canonical plant barcoding marker.", "characterized_in": "arabidopsis_thaliana"},
+            {"symbol": "psaA", "function": "Photosystem I P700 apoprotein A1 (plastid-encoded).", "characterized_in": "arabidopsis_thaliana"},
+            {"symbol": "psaB", "function": "Photosystem I P700 apoprotein A2 (plastid-encoded).", "characterized_in": "arabidopsis_thaliana"},
+            {"symbol": "atpB", "function": "Plastid ATP synthase beta subunit.", "characterized_in": "arabidopsis_thaliana"},
+        ],
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# GWAS power estimation
+# ---------------------------------------------------------------------------
+
+# Approximate genome-wide common-SNP counts per species, used to set the
+# Bonferroni multiple-testing burden. Conservative round numbers — the point
+# is an order-of-magnitude honest estimate, not false precision. Species not
+# listed fall back to a deliberately conservative low count (fewer SNPs ->
+# lighter correction -> *optimistic* required-N, flagged in the response).
+_SPECIES_SNP_COUNT = {
+    "arabidopsis_thaliana": 12_000_000,
+    "oryza_sativa": 20_000_000,
+    "oryza_indica": 20_000_000,
+    "zea_mays": 50_000_000,
+    "triticum_aestivum": 40_000_000,
+    "solanum_lycopersicum": 4_000_000,
+    "vitis_vinifera": 2_000_000,
+    "sorghum_bicolor": 6_000_000,
+    "glycine_max": 10_000_000,
+}
+_DEFAULT_SNP_COUNT = 1_000_000
+
+
+def _inv_norm_cdf(p: float) -> float:
+    """Inverse standard-normal CDF (probit) via Acklam's rational approximation.
+
+    Pure-Python so the server carries no scipy/numpy dependency. Accurate to
+    ~1e-9 across (0,1) — far tighter than the GWAS estimate needs.
+    """
+    if not 0.0 < p < 1.0:
+        raise ValueError("p must be in (0, 1)")
+    a = [-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02,
+         1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00]
+    b = [-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02,
+         6.680131188771972e+01, -1.328068155288572e+01]
+    c = [-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00,
+         -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00]
+    d = [7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00,
+         3.754408661907416e+00]
+    plow, phigh = 0.02425, 1 - 0.02425
+    if p < plow:
+        q = math.sqrt(-2 * math.log(p))
+        return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / \
+               ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1)
+    if p <= phigh:
+        q = p - 0.5
+        r = q * q
+        return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q / \
+               (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1)
+    q = math.sqrt(-2 * math.log(1 - p))
+    return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / \
+            ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1)
+
+
+# ---------------------------------------------------------------------------
+# Network clients for the new external services (test-seam pattern)
+# ---------------------------------------------------------------------------
+
+def _grin_client() -> httpx.Client:
+    """Client for the USDA GRIN-Global REST service (accession resolution)."""
+    return httpx.Client(
+        base_url=GRIN_BASE_URL,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "cultivars-mcp/0.2 (Copyleft Cultivars; accession resolution)",
+        },
+        timeout=30,
+        follow_redirects=True,
+    )
+
+
+def _ipfs_client() -> httpx.Client:
+    """Client for the local kubo (go-ipfs) HTTP API."""
+    return httpx.Client(base_url=IPFS_API_URL, timeout=30)
+
+
+# ===========================================================================
+# Phenotype ledger — the write path
+# ===========================================================================
+
+@mcp.tool()
+def submit_phenotype_observation(
+    accession_id: str,
+    common_name: str,
+    species: str,
+    trait_category: str,
+    measurement_type: str,
+    measurement_value: bool | float | int | str | None = None,
+    measurement_unit: str | None = None,
+    measurement_protocol: str | None = None,
+    trait_atlas_gene: str | None = None,
+    agroecological_zone: str | None = None,
+    environment: dict | None = None,
+    season: str | None = None,
+    submitter_pubkey: str | None = None,
+    signature: str | None = None,
+    license: str = LEDGER_DATA_LICENSE,
+    submitted: str | None = None,
+    write: bool = True,
+) -> dict:
+    """Submit a community phenotype observation to the open ledger.
+
+    This is the write path that turns cultivars-mcp from a read-only query
+    layer into a participatory community-science instrument. A grower who
+    confirms that their Oaxacan landrace maize survived 14-day flooding is
+    producing GWAS-relevant data; this tool captures it in a machine-readable,
+    GWAS-aggregatable YAML record.
+
+    The tool prepares (and, by default, writes) the observation artifact; it
+    does NOT need GitHub credentials. The human submits the resulting file as
+    a pull request, or it accumulates in a local/shared `ledger_dir`. Data in
+    the ledger is licensed ODbL-1.0 (open-data copyleft), distinct from the
+    Apache-2.0 code license — see DATA_LICENSE.md.
+
+    Args:
+        accession_id: Formal ID where known (GRIN/IRRI/USDA), else
+            'community:{name}'. If informal, the response suggests running
+            resolve_accession to find a formal match.
+        common_name: Farmer-provided name (e.g. 'Gobol Sail', 'Hopi blue corn').
+        species: Ensembl Plants species string (e.g. 'oryza_sativa').
+        trait_category: Must match an atlas trait category (see
+            list_trait_categories) or an organellar trait (see
+            query_organellar_variants).
+        measurement_type: 'binary' | 'continuous' | 'categorical'.
+        measurement_value: The measured value. bool for binary, number for
+            continuous, string for categorical.
+        measurement_unit: Unit for continuous measurements (e.g. 'cm', 'days').
+        measurement_protocol: Free-text protocol handle (e.g.
+            '14_day_submergence_field').
+        trait_atlas_gene: Optional canonical gene from the atlas (e.g. 'SUB1A').
+        agroecological_zone: Koppen or FAO zone string.
+        environment: Optional dict of structured environment fields (merged
+            with agroecological_zone / season).
+        season: Season tag (e.g. 'kharif_2026').
+        submitter_pubkey: Optional Ed25519 public key ('ed25519:<hex>'). Sign
+            the canonical_form returned here and resubmit with `signature` to
+            create a verifiable, pseudonymous contribution record.
+        signature: Optional detached Ed25519 signature over canonical_form.
+        license: Data license (default ODbL-1.0).
+        submitted: ISO date (default today, UTC).
+        write: Whether to write the YAML file to the ledger (default True).
+
+    Returns a structured response: validation result, the assembled
+    observation, its content hash, the canonical form to sign, the written
+    path (if any), and PR submission instructions.
+    """
+    errors: list[str] = []
+
+    accession_id = (accession_id or "").strip()
+    common_name = (common_name or "").strip()
+    species = _normalize_species(species)
+    trait_category = (trait_category or "").strip()
+    measurement_type = (measurement_type or "").strip().lower()
+
+    if not accession_id:
+        errors.append("accession_id is required (use 'community:{name}' if informal)")
+    if not common_name:
+        errors.append("common_name is required")
+    if not _valid_trait_category(trait_category):
+        errors.append(
+            f"trait_category {trait_category!r} is not a known atlas or organellar "
+            "trait category — call list_trait_categories"
+        )
+    if species not in _known_species():
+        errors.append(
+            f"species {species!r} is not recognised — call list_plant_species"
+        )
+    if measurement_type not in _VALID_MEASUREMENT_TYPES:
+        errors.append(
+            f"measurement_type must be one of {sorted(_VALID_MEASUREMENT_TYPES)}"
+        )
+    else:
+        if measurement_value is None:
+            errors.append("measurement_value is required")
+        elif measurement_type == "binary" and not isinstance(measurement_value, bool):
+            errors.append("binary measurement_value must be a boolean")
+        elif measurement_type == "continuous" and isinstance(measurement_value, bool):
+            errors.append("continuous measurement_value must be numeric, not boolean")
+        elif measurement_type == "continuous" and not isinstance(measurement_value, (int, float)):
+            errors.append("continuous measurement_value must be numeric")
+
+    if trait_atlas_gene and trait_category in TRAIT_ATLAS:
+        symbols = {g.get("symbol") for g in TRAIT_ATLAS[trait_category]["genes"]}
+        symbols |= {g.get("alias") for g in TRAIT_ATLAS[trait_category]["genes"]}
+        if trait_atlas_gene not in symbols:
+            errors.append(
+                f"trait_atlas_gene {trait_atlas_gene!r} is not a canonical gene in "
+                f"trait {trait_category!r} (genes: {sorted(s for s in symbols if s)})"
+            )
+
+    if errors:
+        return {
+            "ok": False,
+            "validation": "failed",
+            "errors": errors,
+            "hint": "Fix the fields above and resubmit. Nothing was written.",
+        }
+
+    env: dict = dict(environment or {})
+    if agroecological_zone:
+        env.setdefault("agroecological_zone", agroecological_zone)
+    if season:
+        env.setdefault("season", season)
+
+    submitted = (submitted or datetime.date.today().isoformat())
+
+    observation = {
+        "schema_version": LEDGER_SCHEMA_VERSION,
+        "accession_id": accession_id,
+        "common_name": common_name,
+        "species": species,
+        "trait_category": trait_category,
+        "trait_atlas_gene": trait_atlas_gene,
+        "measurement": {
+            "type": measurement_type,
+            "value": measurement_value,
+            "unit": measurement_unit,
+            "protocol": measurement_protocol,
+        },
+        "environment": env or None,
+        "provenance": {
+            "submitter_pubkey": submitter_pubkey,
+            "signature": signature,
+            "location_proof": None,
+            "ipfs_cid": None,
+        },
+        "license": license,
+        "submitted": submitted,
+    }
+
+    canonical = _canonical_observation_bytes(observation).decode("utf-8")
+    content_hash = _content_hash(observation)
+
+    informal = accession_id.lower().startswith("community:") or ":" not in accession_id
+    accession_suggestion = None
+    if informal:
+        accession_suggestion = (
+            f"'{accession_id}' looks informal. Run resolve_accession(query="
+            f"'{common_name}') to find a formal GRIN/USDA accession ID and "
+            "improve downstream GWAS aggregation."
+        )
+
+    response: dict = {
+        "ok": True,
+        "validation": "passed",
+        "observation": observation,
+        "content_hash": content_hash,
+        "canonical_form": canonical,
+        "accession_suggestion": accession_suggestion,
+        "signing_instructions": (
+            "To create a verifiable contribution record, sign `canonical_form` "
+            "(UTF-8 bytes) with your Ed25519 secret key and resubmit with "
+            "submitter_pubkey='ed25519:<hex>' and signature='<hex>'. Verify any "
+            "record later with verify_observation_integrity. Signing is optional "
+            "but encouraged — it builds a pseudonymous scientific CV tied to a "
+            "keypair, not a financial instrument."
+        ),
+        "license_note": (
+            f"Ledger data is licensed {license} (open-data copyleft). See "
+            "DATA_LICENSE.md. This differs from the Apache-2.0 code license."
+        ),
+    }
+
+    if not write:
+        response["written"] = False
+        response["note"] = "write=False — artifact prepared but not persisted."
+        return response
+
+    if _yaml is None:
+        response["written"] = False
+        response["warning"] = (
+            "PyYAML is not installed, so the artifact could not be written. "
+            "Install it (pip install pyyaml) or copy `observation` out manually."
+        )
+        return response
+
+    ledger = _ledger_dir()
+    target_dir = ledger / _path_safe(species) / _path_safe(accession_id)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{_path_safe(trait_category)}_{_path_safe(submitted)}.yaml"
+    path = target_dir / filename
+
+    header = (
+        f"# Cultivars community phenotype observation\n"
+        f"# schema {LEDGER_SCHEMA_VERSION} — licensed {license} (see DATA_LICENSE.md)\n"
+        f"# content_hash: {content_hash}\n"
+    )
+    path.write_text(header + _yaml.safe_dump(observation, sort_keys=False, allow_unicode=True))
+
+    response["written"] = True
+    response["path"] = str(path)
+    response["pr_instructions"] = (
+        f"Artifact written to {path}. To contribute it to the commons: commit "
+        "the file under phenotypes/ and open a pull request against "
+        "copyleftcultivars/cultivars-mcp. The maintainers aggregate merged "
+        "observations for community GWAS (see estimate_gwas_power)."
+    )
+    return response
+
+
+@mcp.tool()
+def query_community_phenotypes(
+    trait_category: str,
+    species: str | None = None,
+    min_observations: int = 1,
+) -> dict:
+    """Aggregate community phenotype observations from the ledger.
+
+    Reads the YAML observation files written by submit_phenotype_observation
+    (under `ledger_dir`, default ./phenotypes) and summarises them for a
+    trait — observation count, measurement distribution, and the accessions
+    carrying observations. Powers estimate_gwas_power.
+
+    Args:
+        trait_category: Atlas or organellar trait category to aggregate.
+        species: Optional Ensembl species filter.
+        min_observations: Minimum count to consider the result actionable
+            (purely informational — the count is always returned).
+    """
+    trait_category = (trait_category or "").strip()
+    species_filter = _normalize_species(species) if species else None
+
+    if _yaml is None:
+        return {
+            "ok": False,
+            "error": "PyYAML is not installed; cannot read the ledger.",
+            "hint": "pip install pyyaml",
+        }
+
+    ledger = _ledger_dir()
+    if not ledger.exists():
+        return {
+            "ok": True,
+            "trait_category": trait_category,
+            "species": species_filter,
+            "observation_count": 0,
+            "ledger_dir": str(ledger),
+            "note": "No ledger directory yet — no observations submitted.",
+        }
+
+    observations: list[dict] = []
+    parse_errors: list[str] = []
+    for path in ledger.rglob("*.yaml"):
+        try:
+            doc = _yaml.safe_load(path.read_text())
+        except Exception as exc:  # noqa: BLE001 - keep one bad file from killing the query
+            parse_errors.append(f"{path.name}: {exc}")
+            continue
+        if not isinstance(doc, dict):
+            continue
+        if doc.get("trait_category") != trait_category:
+            continue
+        if species_filter and doc.get("species") != species_filter:
+            continue
+        observations.append(doc)
+
+    # Build the measurement distribution.
+    value_counts: dict[str, int] = {}
+    continuous_values: list[float] = []
+    accessions: dict[str, int] = {}
+    signed = 0
+    for obs in observations:
+        m = obs.get("measurement") or {}
+        mtype, val = m.get("type"), m.get("value")
+        if mtype == "continuous" and isinstance(val, (int, float)) and not isinstance(val, bool):
+            continuous_values.append(float(val))
+        else:
+            value_counts[str(val)] = value_counts.get(str(val), 0) + 1
+        acc = obs.get("accession_id") or "unknown"
+        accessions[acc] = accessions.get(acc, 0) + 1
+        prov = obs.get("provenance") or {}
+        if prov.get("signature") and prov.get("submitter_pubkey"):
+            signed += 1
+
+    distribution: dict = {"categorical_or_binary": value_counts}
+    if continuous_values:
+        distribution["continuous"] = {
+            "n": len(continuous_values),
+            "min": min(continuous_values),
+            "max": max(continuous_values),
+            "mean": round(sum(continuous_values) / len(continuous_values), 4),
+        }
+
+    return {
+        "ok": True,
+        "trait_category": trait_category,
+        "species": species_filter,
+        "observation_count": len(observations),
+        "meets_min_observations": len(observations) >= min_observations,
+        "distinct_accessions": len(accessions),
+        "accessions": sorted(accessions),
+        "signed_observations": signed,
+        "measurement_distribution": distribution,
+        "ledger_dir": str(ledger),
+        "parse_errors": parse_errors or None,
+        "next_step": (
+            "Feed observation_count into estimate_gwas_power(trait_category, "
+            "species) to see how close the community is to detecting a locus."
+        ),
+    }
+
+
+@mcp.tool()
+def verify_observation_integrity(
+    yaml_path_or_content: str,
+    pubkey: str | None = None,
+) -> dict:
+    """Verify the Ed25519 signature on a phenotype observation.
+
+    Confirms that an observation was signed by the holder of a given keypair
+    and has not been altered since signing — a verifiable, pseudonymous
+    contribution record (a scientific CV tied to a keypair, not money).
+
+    Args:
+        yaml_path_or_content: Either a path to a ledger YAML file or the raw
+            YAML content of an observation.
+        pubkey: Ed25519 public key to verify against ('ed25519:<hex>' or bare
+            hex/base64). If omitted, uses the key embedded in the observation's
+            provenance.submitter_pubkey.
+
+    Returns {verified, submitter_pubkey, signed_at, canonical_hash, ...}.
+    """
+    if _yaml is None:
+        return {"verified": False, "error": "PyYAML is not installed; cannot parse YAML."}
+
+    raw = yaml_path_or_content or ""
+    p = pathlib.Path(raw)
+    try:
+        if len(raw) < 4096 and p.exists():
+            raw = p.read_text()
+    except OSError:
+        pass  # treat as inline content
+
+    try:
+        obs = _yaml.safe_load(raw)
+    except Exception as exc:  # noqa: BLE001
+        return {"verified": False, "error": f"could not parse YAML: {exc}"}
+    if not isinstance(obs, dict):
+        return {"verified": False, "error": "parsed content is not a mapping/observation"}
+
+    prov = obs.get("provenance") or {}
+    sig = prov.get("signature")
+    key = pubkey or prov.get("submitter_pubkey")
+    if not sig:
+        return {
+            "verified": False,
+            "error": "observation carries no signature",
+            "canonical_hash": _content_hash(obs),
+            "note": "Unsigned observations are still valid data — they just lack attribution proof.",
+        }
+    if not key:
+        return {"verified": False, "error": "no public key supplied or embedded"}
+
+    try:
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    except ImportError:
+        return {
+            "verified": False,
+            "error": "the 'cryptography' package is required for signature verification",
+            "hint": "pip install cryptography",
+        }
+
+    try:
+        pub_bytes = _decode_key_material(key)
+        sig_bytes = _decode_key_material(sig)
+    except ValueError as exc:
+        return {"verified": False, "error": str(exc)}
+
+    message = _canonical_observation_bytes(obs)
+    try:
+        Ed25519PublicKey.from_public_bytes(pub_bytes).verify(sig_bytes, message)
+    except InvalidSignature:
+        return {
+            "verified": False,
+            "submitter_pubkey": key,
+            "canonical_hash": _content_hash(obs),
+            "error": "signature does not match — observation altered or wrong key",
+        }
+    except Exception as exc:  # noqa: BLE001 - malformed key length etc.
+        return {"verified": False, "error": f"verification failed: {exc}"}
+
+    return {
+        "verified": True,
+        "submitter_pubkey": key,
+        "signed_at": obs.get("submitted"),
+        "canonical_hash": _content_hash(obs),
+        "accession_id": obs.get("accession_id"),
+        "trait_category": obs.get("trait_category"),
+    }
+
+
+@mcp.tool()
+def pin_observation_to_ipfs(yaml_path: str, vcf_path: str | None = None) -> dict:
+    """Pin an observation (and optionally a VCF) to IPFS via the kubo HTTP API.
+
+    Content-addressed storage makes an observation tamper-evident and
+    location-independent: the returned CID is a permanent, decentralised
+    identifier (a replacement for the centralised S3 URL pattern used by
+    Kannapedia VCFs). On success, the CID is written back into the YAML's
+    provenance.ipfs_cid field.
+
+    Requires a running kubo node (default http://127.0.0.1:5001, override with
+    CULTIVARS_IPFS_API). If IPFS is unreachable, returns a structured fallback
+    with setup instructions rather than raising.
+
+    Args:
+        yaml_path: Path to the observation YAML to pin.
+        vcf_path: Optional path to an associated VCF to pin alongside it.
+    """
+    obs_path = pathlib.Path(yaml_path)
+    if not obs_path.exists():
+        return {"ok": False, "error": f"file not found: {yaml_path}"}
+
+    files_to_pin = [obs_path]
+    if vcf_path:
+        vcf = pathlib.Path(vcf_path)
+        if not vcf.exists():
+            return {"ok": False, "error": f"vcf file not found: {vcf_path}"}
+        files_to_pin.append(vcf)
+
+    pinned: dict[str, str] = {}
+    try:
+        with _ipfs_client() as client:
+            for fp in files_to_pin:
+                resp = client.post(
+                    "/api/v0/add",
+                    params={"pin": "true", "cid-version": "1"},
+                    files={"file": (fp.name, fp.read_bytes())},
+                )
+                resp.raise_for_status()
+                # kubo may stream multiple JSON objects; take the last complete one.
+                last = [line for line in resp.text.strip().splitlines() if line.strip()][-1]
+                pinned[fp.name] = json.loads(last)["Hash"]
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TransportError):
+        return {
+            "ok": False,
+            "ipfs_available": False,
+            "fallback": True,
+            "api_url": IPFS_API_URL,
+            "instructions": (
+                "No kubo node reachable. Install IPFS (https://docs.ipfs.tech/install/), "
+                "run `ipfs daemon`, or set CULTIVARS_IPFS_API to a reachable gateway, "
+                "then retry. The observation remains valid without a CID."
+            ),
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "ipfs_available": True, "error": f"IPFS add failed: {exc}"}
+
+    yaml_cid = pinned.get(obs_path.name)
+    wrote_back = False
+    if yaml_cid and _yaml is not None:
+        try:
+            doc = _yaml.safe_load(obs_path.read_text())
+            if isinstance(doc, dict):
+                doc.setdefault("provenance", {})
+                doc["provenance"]["ipfs_cid"] = yaml_cid
+                obs_path.write_text(_yaml.safe_dump(doc, sort_keys=False, allow_unicode=True))
+                wrote_back = True
+        except Exception:  # noqa: BLE001 - write-back is best-effort
+            wrote_back = False
+
+    return {
+        "ok": True,
+        "ipfs_available": True,
+        "cids": pinned,
+        "observation_cid": yaml_cid,
+        "vcf_cid": pinned.get(pathlib.Path(vcf_path).name) if vcf_path else None,
+        "wrote_cid_to_yaml": wrote_back,
+        "note": "The observation_cid is now the canonical, tamper-evident identifier.",
+    }
+
+
+# ===========================================================================
+# GWAS power estimator — individual observation -> collective significance
+# ===========================================================================
+
+@mcp.tool()
+def estimate_gwas_power(
+    trait_category: str,
+    species: str,
+    n_observations: int | None = None,
+    target_gene: str | None = None,
+    maf: float = 0.25,
+) -> dict:
+    """Estimate how many observations a community GWAS needs to detect a locus.
+
+    Closes the loop between an individual grower's observation and collective
+    scientific significance: "can my village's 12 rice varieties help detect
+    the SUB1A locus?" gets a concrete answer — and a recruitment target.
+
+    Uses a standard common-variant additive-model power calculation with a
+    Bonferroni-corrected significance threshold over the species' approximate
+    genome-wide SNP count. The required sample size for power (1 - beta) to
+    detect a locus explaining proportion h2 of phenotypic variance is:
+
+        required_n  ≈  (z_{alpha/2} + z_{beta})^2 / (2 * MAF * (1 - MAF) * effect^2)
+                    =  (z_{alpha/2} + z_{beta})^2 / h2
+
+    where, for the standardised additive model, h2 = 2 * MAF * (1 - MAF) * effect^2,
+    alpha = 0.05 / (genome-wide SNP count), and beta = 0.20 (80% power).
+
+    Args:
+        trait_category: Atlas or organellar trait category.
+        species: Ensembl species string (sets the SNP count / multiple-testing burden).
+        n_observations: Current sample size. If omitted, pulled live from the
+            community ledger via query_community_phenotypes.
+        target_gene: Optional gene of interest (annotation only).
+        maf: Assumed minor-allele frequency for the formula (default 0.25).
+    """
+    species = _normalize_species(species)
+
+    if not _valid_trait_category(trait_category):
+        return {
+            "ok": False,
+            "error": f"trait_category {trait_category!r} not recognised",
+            "hint": "call list_trait_categories",
+        }
+    if not 0.0 < maf <= 0.5:
+        return {"ok": False, "error": "maf must be in (0, 0.5]"}
+
+    current_n = n_observations
+    pulled_from_ledger = False
+    if current_n is None:
+        ledger_result = query_community_phenotypes(trait_category, species)
+        current_n = int(ledger_result.get("observation_count", 0)) if ledger_result.get("ok") else 0
+        pulled_from_ledger = True
+
+    snp_count = _SPECIES_SNP_COUNT.get(species, _DEFAULT_SNP_COUNT)
+    conservative_snp_estimate = species not in _SPECIES_SNP_COUNT
+    alpha = 0.05 / snp_count
+    z_alpha2 = _inv_norm_cdf(1 - alpha / 2)
+    z_beta = _inv_norm_cdf(0.80)  # ~0.8416, for 80% power
+
+    def required_n(h2: float) -> int:
+        return math.ceil((z_alpha2 + z_beta) ** 2 / h2)
+
+    large_h2, medium_h2 = 0.10, 0.05
+    n_large = required_n(large_h2)
+    n_medium = required_n(medium_h2)
+
+    def gap_message(needed: int, label: str) -> str:
+        remaining = max(0, needed - current_n)
+        if remaining == 0:
+            return f"The ledger already has enough observations ({current_n}) for 80% power to detect a {label} locus."
+        return (
+            f"For a {label} locus you need ~{needed} observations. The community "
+            f"ledger currently has {current_n} — submit yours and recruit "
+            f"{remaining} more."
+        )
+
+    return {
+        "ok": True,
+        "trait_category": trait_category,
+        "species": species,
+        "species_quality": _species_quality(species),
+        "target_gene": target_gene,
+        "current_observations": current_n,
+        "current_observations_source": "community_ledger" if pulled_from_ledger else "caller-supplied",
+        "assumptions": {
+            "power": 0.80,
+            "alpha_per_test": 0.05,
+            "bonferroni_snp_count": snp_count,
+            "bonferroni_alpha": alpha,
+            "minor_allele_frequency": maf,
+            "z_alpha_over_2": round(z_alpha2, 4),
+            "z_beta": round(z_beta, 4),
+            "model": "common-variant additive",
+            "conservative_snp_estimate": conservative_snp_estimate,
+        },
+        "required_observations": {
+            "large_effect_locus": {"variance_explained": large_h2, "n": n_large},
+            "medium_effect_locus": {"variance_explained": medium_h2, "n": n_medium},
+        },
+        "formula": "required_n ≈ (z_{alpha/2} + z_{beta})^2 / h2,  h2 = 2·MAF·(1-MAF)·effect^2,  alpha = 0.05 / SNP_count",
+        "interpretation": {
+            "large_effect": gap_message(n_large, "large-effect (SUB1A-scale, ~10% variance)"),
+            "medium_effect": gap_message(n_medium, "medium-effect (~5% variance)"),
+        },
+        "caveats": (
+            "Order-of-magnitude guidance, not a substitute for formal power "
+            "analysis. Assumes unrelated individuals, a single common causal "
+            "variant, balanced binary phenotype, and no population structure. "
+            "Real plant GWAS must correct for kinship and structure (mixed "
+            "models), which raises the required N."
+            + (" SNP count is a conservative default for this species — treat the required N as optimistic." if conservative_snp_estimate else "")
+        ),
+    }
+
+
+# ===========================================================================
+# GRIN accession resolver — folk taxonomy -> formal genomics
+# ===========================================================================
+
+# Map common GRIN genus/species names to Ensembl Plants species strings so a
+# resolved accession can flow straight into the genomics tools.
+_GRIN_TO_ENSEMBL = {
+    "oryza sativa": "oryza_sativa",
+    "zea mays": "zea_mays",
+    "triticum aestivum": "triticum_aestivum",
+    "hordeum vulgare": "hordeum_vulgare",
+    "sorghum bicolor": "sorghum_bicolor",
+    "glycine max": "glycine_max",
+    "solanum lycopersicum": "solanum_lycopersicum",
+    "vigna unguiculata": "vigna_unguiculata",
+    "cajanus cajan": "cajanus_cajan",
+    "eleusine coracana": "eleusine_coracana",
+    "manihot esculenta": "manihot_esculenta",
+}
+
+
+def _grin_species_to_ensembl(taxon: str | None) -> str | None:
+    if not taxon:
+        return None
+    key = taxon.strip().lower()
+    if key in _GRIN_TO_ENSEMBL:
+        return _GRIN_TO_ENSEMBL[key]
+    # Try just the first two binomial tokens.
+    parts = key.split()
+    if len(parts) >= 2:
+        return _GRIN_TO_ENSEMBL.get(f"{parts[0]} {parts[1]}")
+    return None
+
+
+@mcp.tool()
+def resolve_accession(
+    query: str,
+    crop_type: str | None = None,
+    region: str | None = None,
+    limit: int = 10,
+) -> dict:
+    """Resolve a farmer's seed name to a formal GRIN-Global accession.
+
+    Bridges folk taxonomy ("my grandmother's Hopi blue corn") to the formal
+    accession systems that GWAS and genomics need. Queries the USDA
+    GRIN-Global REST service (600,000+ accessions with common names, origins,
+    and trait observations) and maps the result back to an Ensembl Plants
+    species string so it can feed lookup_gene / find_trait_genes /
+    submit_phenotype_observation.
+
+    Args:
+        query: Common or scientific seed name (e.g. 'Hopi blue corn', 'Gobol Sail').
+        crop_type: Optional crop hint to narrow results (e.g. 'maize').
+        region: Optional geographic origin hint.
+        limit: Maximum matches to return (default 10, max 50).
+
+    Returns candidate accessions with formal ID, species, origin, and the
+    Ensembl species equivalent. GRIN's API shape varies; parsing is defensive
+    and the response flags when no structured match was found.
+    """
+    q = (query or "").strip()
+    if not q:
+        return {"ok": False, "error": "query is required"}
+    limit = min(max(1, limit), 50)
+
+    params = {"q": q, "limit": limit}
+    if crop_type:
+        params["crop"] = crop_type
+    if region:
+        params["origin"] = region
+
+    try:
+        with _grin_client() as client:
+            resp = _get_with_retry(client, "/search/accessions", params=params)
+    except httpx.HTTPError as exc:
+        return {
+            "ok": False,
+            "error": f"GRIN-Global request failed: {exc}",
+            "fallback": "Search manually at https://npgsweb.ars-grin.gov/gringlobal/search",
+            "query": q,
+        }
+
+    if resp.status_code == 404:
+        return {"ok": True, "query": q, "match_count": 0, "matches": [],
+                "note": "GRIN returned no matches for this query."}
+    if resp.status_code >= 400:
+        return {
+            "ok": False,
+            "error": f"GRIN-Global returned HTTP {resp.status_code}",
+            "detail": resp.text[:300],
+            "fallback": "Search manually at https://npgsweb.ars-grin.gov/gringlobal/search",
+        }
+
+    try:
+        payload = resp.json()
+    except Exception:  # noqa: BLE001
+        return {"ok": False, "error": "GRIN-Global response was not JSON",
+                "detail": resp.text[:300]}
+
+    # GRIN responses vary; accept a list, or a dict wrapping a list under
+    # common keys. Parse defensively into a normalised shape.
+    records: list = []
+    if isinstance(payload, list):
+        records = payload
+    elif isinstance(payload, dict):
+        for key in ("data", "results", "accessions", "items"):
+            if isinstance(payload.get(key), list):
+                records = payload[key]
+                break
+
+    def _field(rec: dict, *names):
+        for n in names:
+            if rec.get(n) not in (None, ""):
+                return rec[n]
+        return None
+
+    matches = []
+    for rec in records[:limit]:
+        if not isinstance(rec, dict):
+            continue
+        taxon = _field(rec, "taxon", "taxonomy", "species", "scientificName")
+        matches.append({
+            "accession_id": _field(rec, "accessionId", "accession_id", "accenumb", "id"),
+            "common_name": _field(rec, "commonName", "common_name", "name"),
+            "taxon": taxon,
+            "ensembl_species": _grin_species_to_ensembl(taxon),
+            "origin": _field(rec, "origin", "originCountry", "country", "geography"),
+            "grin_observations": _field(rec, "observations", "traits"),
+        })
+
+    return {
+        "ok": True,
+        "query": q,
+        "match_count": len(matches),
+        "matches": matches,
+        "note": (
+            "GRIN-Global is the USDA open accession system. Pass an "
+            "ensembl_species into lookup_gene/find_trait_genes, or the "
+            "accession_id into submit_phenotype_observation. The GRIN REST "
+            "schema varies by deployment; if match_count is 0 but you expect "
+            "hits, confirm at https://npgsweb.ars-grin.gov/gringlobal/search"
+        ),
+    }
+
+
+# ===========================================================================
+# Organellar genome tool (Mt / Pt)
+# ===========================================================================
+
+@mcp.tool()
+def query_organellar_variants(
+    species: str,
+    organelle: str = "plastid",
+    region: str | None = None,
+    trait: str | None = None,
+) -> dict:
+    """Query organellar (mitochondrial / plastid) genome variants and traits.
+
+    Mt (mitochondrion) and Pt (plastid) are first-class chromosomes in Ensembl
+    Plants — querying them is valid, not an error. This tool wraps
+    search_variants_in_region against the organellar chromosome and layers a
+    curated organellar trait atlas (CMS, plastid herbicide resistance, plastid
+    photosynthesis) on top — traits that matter for seed sovereignty (hybrid
+    seed production, maternal inheritance of GM/herbicide-resistance traits).
+
+    Args:
+        species: Ensembl species string.
+        organelle: 'plastid' (Pt) or 'mitochondrion' (Mt). Aliases accepted:
+            'chloroplast'->plastid, 'mt'/'mito'->mitochondrion, 'pt'/'cp'->plastid.
+        region: Optional 'start-end' coordinate range on the organellar
+            chromosome. If omitted, only trait context is returned (no variant scan).
+        trait: Optional organellar trait key (see ORGANELLAR_TRAITS:
+            'cms', 'plastid_herbicide_resistance', 'plastid_photosynthesis').
+    """
+    species = _normalize_species(species)
+    org = (organelle or "").strip().lower()
+    alias = {
+        "plastid": "plastid", "pt": "plastid", "cp": "plastid", "chloroplast": "plastid",
+        "mitochondrion": "mitochondrion", "mt": "mitochondrion", "mito": "mitochondrion",
+        "mitochondria": "mitochondrion",
+    }
+    if org not in alias:
+        return {
+            "ok": False,
+            "error": f"organelle {organelle!r} not understood",
+            "valid": ["plastid", "mitochondrion"],
+        }
+    org = alias[org]
+    chromosome = "Pt" if org == "plastid" else "Mt"
+
+    result: dict = {
+        "ok": True,
+        "species": species,
+        "organelle": org,
+        "chromosome": chromosome,
+        "note": (
+            f"'{chromosome}' is the Ensembl Plants chromosome identifier for the "
+            f"{org} genome — a valid query target, not an error. Organellar "
+            "genomes are maternally inherited."
+        ),
+    }
+
+    if trait:
+        trait_key = trait.strip().lower().replace(" ", "_").replace("-", "_")
+        entry = ORGANELLAR_TRAITS.get(trait_key)
+        if not entry:
+            result["trait_error"] = (
+                f"trait {trait!r} not in the organellar atlas"
+            )
+            result["available_organellar_traits"] = sorted(ORGANELLAR_TRAITS)
+        else:
+            if entry["organelle"] != org:
+                result["trait_warning"] = (
+                    f"trait {trait_key!r} is a {entry['organelle']} trait "
+                    f"(chromosome {entry['chromosome']}), but you queried {org}."
+                )
+            result["trait_context"] = {
+                "trait": trait_key,
+                "description": entry["description"],
+                "natural_farming_relevance": entry["natural_farming_relevance"],
+                "genes": entry["genes"],
+            }
+
+    if region:
+        r = region.strip()
+        # Accept either 'start-end' or a full 'chrom:start-end'.
+        full_region = r if ":" in r else f"{chromosome}:{r}"
+        variants = search_variants_in_region(region=full_region, species=species)
+        result["variant_scan"] = variants
+    else:
+        result["variant_scan_hint"] = (
+            f"Pass region='start-end' to scan {chromosome} for known variants, "
+            f"e.g. query_organellar_variants(species='{species}', "
+            f"organelle='{org}', region='1-5000')."
+        )
+
+    return result
+
+
+# ===========================================================================
+# Offline bridge — online genomics -> TinyLLamaFarmer field handoff
+# ===========================================================================
+
+@mcp.tool()
+def export_offline_snapshot(
+    trait_category: str,
+    species: str,
+    include_orthologs: bool = True,
+    max_genes: int | None = None,
+) -> dict:
+    """Package a trait's genomics into a self-contained offline snapshot.
+
+    Bridges the online MCP to the offline-first TinyLLamaFarmer: a grower who
+    can't stay connected in the field gets a portable JSON blob with the trait
+    atlas entry, the species coverage grade, and (optionally) the resolved
+    orthologs in their crop — everything needed to reason about the trait
+    off-grid. This is the online->offline direction; the reverse (field
+    observation -> ledger) is submit_phenotype_observation.
+
+    Args:
+        trait_category: Atlas trait category to package.
+        species: Target Ensembl species string.
+        include_orthologs: If True, resolve canonical genes -> target-species
+            orthologs (one network round-trip via translate_trait_to_species).
+            Set False for a fully offline, atlas-only snapshot.
+        max_genes: Optional cap on genes translated (passed to translation).
+
+    Returns the snapshot file path and a summary of what was included.
+    """
+    species = _normalize_species(species)
+    trait_key = (trait_category or "").strip().lower().replace(" ", "_").replace("-", "_")
+    if trait_key not in TRAIT_ATLAS:
+        return {
+            "ok": False,
+            "error": f"trait_category {trait_category!r} not in the atlas",
+            "available_traits": sorted(TRAIT_ATLAS),
+        }
+
+    atlas_entry = TRAIT_ATLAS[trait_key]
+    snapshot: dict = {
+        "snapshot_schema": "1.0",
+        "generated": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "source": "cultivars-mcp",
+        "trait_category": trait_key,
+        "target_species": species,
+        "species_quality": _species_quality(species),
+        "atlas": {
+            "description": atlas_entry["description"],
+            "natural_farming_relevance": atlas_entry["natural_farming_relevance"],
+            "genes": atlas_entry["genes"],
+        },
+        "orthologs_included": False,
+        "consumer": "TinyLLamaFarmer context injection",
+    }
+
+    if include_orthologs:
+        translation = translate_trait_to_species(
+            trait=trait_key, target_species=species, max_genes=max_genes
+        )
+        # translate returns a fallback/error dict for unsupported species; keep
+        # whatever it returned so the snapshot honestly records the gap.
+        snapshot["orthologs"] = translation
+        snapshot["orthologs_included"] = "error" not in translation and "available_in_ensembl_plants" not in translation
+
+    snap_dir = _snapshots_dir()
+    snap_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{_path_safe(trait_key)}_{_path_safe(species)}.json"
+    path = snap_dir / filename
+    path.write_text(json.dumps(snapshot, indent=2, ensure_ascii=False))
+
+    return {
+        "ok": True,
+        "path": str(path),
+        "trait_category": trait_key,
+        "target_species": species,
+        "gene_count": len(atlas_entry["genes"]),
+        "orthologs_included": snapshot["orthologs_included"],
+        "snapshots_dir": str(snap_dir),
+        "note": (
+            "Self-contained JSON for offline use. Transfer to a field device "
+            "running TinyLLamaFarmer. Online->offline is one-directional; bring "
+            "field observations back with submit_phenotype_observation."
+        ),
+    }
+
+
+# ===========================================================================
+# Orphan crops contribution pipeline
+# ===========================================================================
+
+@mcp.tool()
+def list_orphan_crop_requests() -> dict:
+    """List requested orphan-crop trait entries (the contribution 'bounty' list).
+
+    Orphan crops — teff, fonio, cowpea, pigeon pea, finger millet, amaranth —
+    feed resource-limited farmers but are systematically underrepresented in
+    model-system-funded genomics. This returns the WANTED_TRAITS.yaml bounty
+    list and invites contributors to claim an entry via a PR.
+    """
+    path = _data_dir() / "WANTED_TRAITS.yaml"
+    if not path.exists():
+        return {
+            "ok": True,
+            "requests": [],
+            "note": "No WANTED_TRAITS.yaml found — no open orphan-crop requests.",
+        }
+    if _yaml is None:
+        return {
+            "ok": False,
+            "error": "PyYAML is not installed; cannot read WANTED_TRAITS.yaml.",
+            "hint": "pip install pyyaml",
+        }
+    try:
+        doc = _yaml.safe_load(path.read_text()) or {}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"could not parse WANTED_TRAITS.yaml: {exc}"}
+
+    requests = doc.get("wanted_traits", []) if isinstance(doc, dict) else []
+    return {
+        "ok": True,
+        "request_count": len(requests),
+        "requests": requests,
+        "how_to_contribute": (
+            "Claim a trait by opening a PR that adds it to TRAIT_ATLAS in "
+            "server.py with at least GWAS-mapped evidence and a primary_ref. "
+            "See CONTRIBUTING.md '# ORPHAN CROPS BOUNTY'."
+        ),
+        "source": str(path),
     }
 
 

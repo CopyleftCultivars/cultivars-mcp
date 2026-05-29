@@ -61,6 +61,57 @@ The atlas lives in `server.py` as the `TRAIT_ATLAS` dict. Each top-level key is 
 
 ---
 
+# ORPHAN CROPS BOUNTY
+
+The atlas has historically over-indexed on the three most-funded model systems
+(Arabidopsis, rice, maize). Copyleft Cultivars's actual audience grows **orphan
+crops**: teff, fonio, cowpea, pigeon pea, finger millet, amaranth, enset, grass
+pea, bambara groundnut, quinoa. These feed billions but are systematically
+underrepresented in public genomics. **Closing this gap is the single
+highest-value data contribution you can make.**
+
+### The bounty list
+
+Open requests live in [`WANTED_TRAITS.yaml`](WANTED_TRAITS.yaml) and are surfaced
+at runtime by the `list_orphan_crop_requests` MCP tool. Each entry names a crop,
+trait, candidate genes, and the minimum evidence tier we'll accept.
+
+We seed-funded the category with five initial entries already in `TRAIT_ATLAS`:
+`teff_drought_tolerance`, `cowpea_heat_tolerance`,
+`finger_millet_calcium_accumulation`, `pigeon_pea_salinity_tolerance`,
+`amaranth_c4_photosynthesis`. Use these as templates.
+
+### How to claim a bounty
+
+1. Pick an entry from `WANTED_TRAITS.yaml` (or propose a new orphan crop).
+2. On the corresponding GitHub Issue, comment to claim it. Maintainers label
+   these issues **`bounty`**; if no issue exists, open one with that label.
+3. Open a PR that:
+   - Adds the trait category to `TRAIT_ATLAS` in `server.py` following the
+     schema in §1 above.
+   - Sets `status: claimed` (then `merged` on merge) for the entry in
+     `WANTED_TRAITS.yaml`.
+   - Includes at least one gene with a `primary_ref` citation.
+
+### Evidence-tier requirement for orphan-crop entries
+
+Because most orphan crops are **not in Ensembl Plants**, symbol resolution
+won't work — entries are literature handles and MUST carry honest provenance:
+
+- **Minimum tier: `gwas_mapped`** (a published GWAS/QTL associating the locus
+  with the trait) for new bounty entries. `sequence_similarity_only` is
+  acceptable only as a *secondary* gene alongside at least one mapped gene.
+- Add an `ensembl_caveat` on the category and a `note` on each gene stating it
+  is an orphan-crop literature handle (e.g. *"Cajanus cajan genome published
+  (Varshney 2012) but not in Ensembl Plants"*).
+- Prefer the published reference genome's gene IDs where one exists; cite the
+  genome paper.
+
+This keeps the orphan-crop atlas honest about the difference between "we have a
+mapped locus" and "this looks similar to a known gene in another species."
+
+---
+
 ## 2. Fix an atlas gene's resolution
 
 If a gene in the atlas returns `error` from `lookup_gene`, you have three paths:

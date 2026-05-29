@@ -335,6 +335,91 @@ Subpopulations: `"Stiff Stalk"`, `"Non-Stiff Stalk"`, `"Tropical / Subtropical"`
 
 ---
 
+### Community science tools (the write path)
+
+Everything above is read-only. These tools let grower-scientists **contribute**
+observations and reason about collective statistical power. Ledger data is
+licensed **ODbL-1.0** (open-data copyleft — see `DATA_LICENSE.md`), distinct
+from the Apache-2.0 code license.
+
+#### `submit_phenotype_observation(...)`
+
+Records a field observation as a schema-v1.0 YAML under `ledger_dir` (default
+`./phenotypes/`, override with `CULTIVARS_LEDGER_DIR`). Validates the trait
+category and species, sanitizes the file path, and returns a `canonical_form`
+to sign plus PR instructions. **No GitHub credentials are used** — the tool
+prepares the artifact; you open the PR.
+
+```python
+submit_phenotype_observation(
+    accession_id="community:hopi_blue",      # or a formal GRIN/IRRI/USDA ID
+    common_name="Hopi blue corn",
+    species="zea_mays",
+    trait_category="drought_tolerance",
+    measurement_type="binary", measurement_value=True,
+    measurement_protocol="rainfed_no_irrigation_2026",
+    agroecological_zone="us_southwest_arid", season="2026",
+)
+# → {ok: True, written: True, path: ".../phenotypes/zea_mays/community_hopi_blue/drought_tolerance_2026-05-29.yaml",
+#    content_hash: "sha256:…", canonical_form: "…", accession_suggestion: "run resolve_accession …"}
+```
+
+#### `query_community_phenotypes(trait_category, species=None, min_observations=1)`
+
+Aggregates the ledger: observation count, measurement distribution, distinct
+accessions, signed-observation count.
+
+#### `estimate_gwas_power(trait_category, species, n_observations=None, ...)`
+
+"Can my village's 12 rice varieties detect SUB1A?" Pulls the current count from
+the ledger when `n_observations` is omitted, then reports the sample size needed
+for 80% power to detect large- (~10% variance) and medium- (~5%) effect loci,
+the formula, the assumptions, and the recruit-N-more gap. Order-of-magnitude
+guidance — not a substitute for a mixed-model power analysis.
+
+#### `verify_observation_integrity(yaml_path_or_content, pubkey=None)`
+
+Verifies a detached **Ed25519** signature over the canonical observation form.
+Sign `canonical_form` with your keypair and resubmit with `submitter_pubkey` +
+`signature` to attach verifiable, pseudonymous attribution. Not a token.
+
+#### `pin_observation_to_ipfs(yaml_path, vcf_path=None)`
+
+Content-addresses an observation (and optional VCF) via a local kubo node
+(`CULTIVARS_IPFS_API`, default `http://127.0.0.1:5001`); writes the CID into the
+YAML. Returns a structured fallback with setup steps if no node is reachable.
+
+#### `resolve_accession(query, crop_type=None, region=None)`
+
+Bridges a folk seed name ("my grandmother's Hopi blue corn") to a USDA
+**GRIN-Global** accession and an Ensembl species string. Run this *before*
+`submit_phenotype_observation` / `lookup_gene` when the name is informal.
+
+#### `query_organellar_variants(species, organelle="plastid", region=None, trait=None)`
+
+First-class **Mt/Pt** queries plus a curated organellar mini-atlas: `cms`
+(cytoplasmic male sterility — hybrid seed), `plastid_herbicide_resistance`
+(psbA/atrazine), `plastid_photosynthesis` (rbcL). `Mt`/`Pt` are valid Ensembl
+chromosomes, not errors.
+
+#### `export_offline_snapshot(trait_category, species, include_orthologs=True)`
+
+Packages a trait's atlas entry, species coverage, and optional orthologs into a
+portable JSON under `snapshots/` for offline use with TinyLLamaFarmer.
+
+#### `list_orphan_crop_requests()`
+
+Returns the `WANTED_TRAITS.yaml` orphan-crop contribution bounty list.
+
+#### Population context on existing variant tools
+
+`get_variant(..., population_context=True)` and
+`search_variants_in_region(..., population_context=True)` add per-population
+allele frequencies and a coarse Indica/Japonica Wright's Fst — for
+`richly_covered` species only; a structured "not available" notice otherwise.
+
+---
+
 ## Workflow recipes
 
 Recipes are organized by **user persona**. Find your role below; each section has the recipes most relevant to that kind of work. Recipes show the tool calls; an LLM agent uses them to assemble a natural-language answer.
