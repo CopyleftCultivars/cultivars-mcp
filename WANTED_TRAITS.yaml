@@ -1,0 +1,73 @@
+# Orphan Crops Bounty — wanted trait-atlas entries
+#
+# Orphan crops feed billions of resource-limited farmers but are
+# systematically underrepresented in model-system-funded genomics. This is
+# the contribution "bounty" list surfaced by list_orphan_crop_requests().
+#
+# To claim one: open a PR adding the trait to TRAIT_ATLAS in server.py with
+# at least GWAS-mapped evidence and a primary_ref citation. See CONTRIBUTING.md
+# section "# ORPHAN CROPS BOUNTY". Mark the GitHub issue with the `bounty` label.
+#
+# schema: each entry has a stable `id`, the target `species` (scientific +
+# proposed Ensembl-style name), the `trait`, candidate `genes`, the minimum
+# `evidence_tier` we will accept, and `status` (open | claimed | merged).
+
+schema_version: "1.0"
+wanted_traits:
+  - id: fonio_photoperiod_sensitivity
+    crop: Fonio
+    species: Digitaria exilis
+    trait: photoperiod_flowering
+    rationale: >-
+      Fonio is among the fastest-maturing cereals and a drought-hardy West
+      African staple, but its strong photoperiod sensitivity limits adaptation
+      across latitudes. Flowering-time alleles are largely uncharacterized.
+    candidate_genes: [DeCO, DeFT, DeHd1]
+    evidence_tier: gwas_mapped
+    status: open
+
+  - id: bambara_groundnut_drought
+    crop: Bambara groundnut
+    species: Vigna subterranea
+    trait: drought_tolerance
+    rationale: >-
+      An underutilized African legume that fixes nitrogen and yields on poor,
+      dry soils where other legumes fail. Drought-response regulon poorly mapped.
+    candidate_genes: [VsDREB, VsNAC, VsLEA]
+    evidence_tier: gwas_mapped
+    status: open
+
+  - id: enset_disease_resistance
+    crop: Enset (false banana)
+    species: Ensete ventricosum
+    trait: bacterial_wilt_resistance
+    rationale: >-
+      A perennial Ethiopian food-security crop feeding ~20M people; Xanthomonas
+      wilt is the major threat. Resistance loci essentially uncharacterized.
+    candidate_genes: [EvRGA, EvNPR1]
+    evidence_tier: qtl_mapped
+    status: open
+
+  - id: grasspea_low_odap
+    crop: Grass pea
+    species: Lathyrus sativus
+    trait: neurotoxin_odap_reduction
+    rationale: >-
+      An extremely drought- and flood-tolerant legume of last resort in famine,
+      but its β-ODAP neurotoxin causes lathyrism. Low-ODAP alleles are a
+      priority breeding target for safe consumption.
+    candidate_genes: [LsBOAA, LsCGS]
+    evidence_tier: gwas_mapped
+    status: open
+
+  - id: quinoa_saponin_free
+    crop: Quinoa
+    species: Chenopodium quinoa
+    trait: seed_saponin_content
+    rationale: >-
+      Andean pseudo-cereal with complete protein; bitter saponins require
+      processing. Sweet (low-saponin) alleles ease use by resource-limited
+      households.
+    candidate_genes: [CqTSARL1, CqbHLH]
+    evidence_tier: gwas_mapped
+    status: open

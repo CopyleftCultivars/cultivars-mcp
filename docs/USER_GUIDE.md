@@ -335,6 +335,91 @@ Subpopulations: `"Stiff Stalk"`, `"Non-Stiff Stalk"`, `"Tropical / Subtropical"`
 
 ---
 
+### Community science tools (the write path)
+
+Everything above is read-only. These tools let grower-scientists **contribute**
+observations and reason about collective statistical power. Ledger data is
+licensed **ODbL-1.0** (open-data copyleft — see `DATA_LICENSE.md`), distinct
+from the Apache-2.0 code license.
+
+#### `submit_phenotype_observation(...)`
+
+Records a field observation as a schema-v1.0 YAML under `ledger_dir` (default
+`./phenotypes/`, override with `CULTIVARS_LEDGER_DIR`). Validates the trait
+category and species, sanitizes the file path, and returns a `canonical_form`
+to sign plus PR instructions. **No GitHub credentials are used** — the tool
+prepares the artifact; you open the PR.
+
+```python
+submit_phenotype_observation(
+    accession_id="community:hopi_blue",      # or a formal GRIN/IRRI/USDA ID
+    common_name="Hopi blue corn",
+    species="zea_mays",
+    trait_category="drought_tolerance",
+    measurement_type="binary", measurement_value=True,
+    measurement_protocol="rainfed_no_irrigation_2026",
+    agroecological_zone="us_southwest_arid", season="2026",
+)
+# → {ok: True, written: True, path: ".../phenotypes/zea_mays/community_hopi_blue/drought_tolerance_2026-05-29.yaml",
+#    content_hash: "sha256:…", canonical_form: "…", accession_suggestion: "run resolve_accession …"}
+```
+
+#### `query_community_phenotypes(trait_category, species=None, min_observations=1)`
+
+Aggregates the ledger: observation count, measurement distribution, distinct
+accessions, signed-observation count.
+
+#### `estimate_gwas_power(trait_category, species, n_observations=None, ...)`
+
+"Can my village's 12 rice varieties detect SUB1A?" Pulls the current count from
+the ledger when `n_observations` is omitted, then reports the sample size needed
+for 80% power to detect large- (~10% variance) and medium- (~5%) effect loci,
+the formula, the assumptions, and the recruit-N-more gap. Order-of-magnitude
+guidance — not a substitute for a mixed-model power analysis.
+
+#### `verify_observation_integrity(yaml_path_or_content, pubkey=None)`
+
+Verifies a detached **Ed25519** signature over the canonical observation form.
+Sign `canonical_form` with your keypair and resubmit with `submitter_pubkey` +
+`signature` to attach verifiable, pseudonymous attribution. Not a token.
+
+#### `pin_observation_to_ipfs(yaml_path, vcf_path=None)`
+
+Content-addresses an observation (and optional VCF) via a local kubo node
+(`CULTIVARS_IPFS_API`, default `http://127.0.0.1:5001`); writes the CID into the
+YAML. Returns a structured fallback with setup steps if no node is reachable.
+
+#### `resolve_accession(query, crop_type=None, region=None)`
+
+Bridges a folk seed name ("my grandmother's Hopi blue corn") to a USDA
+**GRIN-Global** accession and an Ensembl species string. Run this *before*
+`submit_phenotype_observation` / `lookup_gene` when the name is informal.
+
+#### `query_organellar_variants(species, organelle="plastid", region=None, trait=None)`
+
+First-class **Mt/Pt** queries plus a curated organellar mini-atlas: `cms`
+(cytoplasmic male sterility — hybrid seed), `plastid_herbicide_resistance`
+(psbA/atrazine), `plastid_photosynthesis` (rbcL). `Mt`/`Pt` are valid Ensembl
+chromosomes, not errors.
+
+#### `export_offline_snapshot(trait_category, species, include_orthologs=True)`
+
+Packages a trait's atlas entry, species coverage, and optional orthologs into a
+portable JSON under `snapshots/` for offline use with TinyLLamaFarmer.
+
+#### `list_orphan_crop_requests()`
+
+Returns the `WANTED_TRAITS.yaml` orphan-crop contribution bounty list.
+
+#### Population context on existing variant tools
+
+`get_variant(..., population_context=True)` and
+`search_variants_in_region(..., population_context=True)` add per-population
+allele frequencies and a coarse Indica/Japonica Wright's Fst — for
+`richly_covered` species only; a structured "not available" notice otherwise.
+
+---
+
 ## Workflow recipes
 
 Recipes are organized by **user persona**. Find your role below; each section has the recipes most relevant to that kind of work. Recipes show the tool calls; an LLM agent uses them to assemble a natural-language answer.
@@ -441,6 +526,77 @@ translate_trait_to_species(trait="drought_tolerance", target_species="sorghum_bi
 3. lookup_uniprot_entry(uniprot_id="<UniProt ID from atlas>")  # for each
 4. lookup_gene_evidence + get_string_interactions for the central kinase (CCaMK/DMI3)
 ```
+
+### 🌱 For community-science contributors / seed-keeper networks
+
+The write path. These recipes grow the commons — a grower's field observation
+becomes GWAS-relevant, attributable, open data.
+
+#### Recipe 9: "Record that my landrace survived the flood, and tell me if it helps map the locus"
+
+```
+1. resolve_accession(query="Gobol Sail")
+   → bridges the folk name to a USDA GRIN accession + ensembl_species="oryza_sativa"
+2. submit_phenotype_observation(
+       accession_id="IRGC_12345", common_name="Gobol Sail", species="oryza_sativa",
+       trait_category="submergence_tolerance", trait_atlas_gene="SUB1A",
+       measurement_type="binary", measurement_value=True,
+       measurement_protocol="14_day_submergence_field", season="kharif_2026")
+   → writes phenotypes/oryza_sativa/IRGC_12345/submergence_tolerance_<date>.yaml (ODbL-1.0)
+   → returns content_hash, a canonical_form to sign, and PR instructions
+3. estimate_gwas_power(trait_category="submergence_tolerance", species="oryza_sativa")
+   → pulls the live ledger count: "you have N observations, need ~M for 80% power —
+     submit yours and recruit M-N more"
+4. (in your shell) commit the YAML and open a PR — the tool never needs your GitHub creds
+```
+
+#### Recipe 10: "Sign my observation so my contribution is verifiable"
+
+Attribution is a pseudonymous scientific CV tied to an Ed25519 keypair — **not** a
+token or wallet. The tool returns the exact bytes to sign (`canonical_form`).
+
+```bash
+# One-time: generate an Ed25519 keypair (any Ed25519 tool works; example uses Python)
+python -c "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey; \
+from cryptography.hazmat.primitives import serialization as s; \
+k=Ed25519PrivateKey.generate(); \
+open('key.sk','wb').write(k.private_bytes(s.Encoding.Raw,s.PrivateFormat.Raw,s.NoEncryption())); \
+print('pubkey: ed25519:'+k.public_key().public_bytes(s.Encoding.Raw,s.PublicFormat.Raw).hex())"
+```
+
+```
+1. submit_phenotype_observation(..., write=False)        # get canonical_form back
+2. (sign canonical_form's UTF-8 bytes with key.sk → signature hex)
+3. submit_phenotype_observation(..., submitter_pubkey="ed25519:<hex>", signature="<hex>")
+4. verify_observation_integrity(yaml_path_or_content="phenotypes/.../...yaml")
+   → {verified: true, submitter_pubkey, canonical_hash}
+```
+
+#### Recipe 11: "Take a trait offline to the field, and make an observation permanent"
+
+```
+1. export_offline_snapshot(trait_category="drought_tolerance", species="sorghum_bicolor")
+   → portable JSON in snapshots/ for TinyLLamaFarmer (atlas + coverage + orthologs)
+2. pin_observation_to_ipfs(yaml_path="phenotypes/.../...yaml")
+   → content-addressed CID, written back into the YAML (needs a local kubo node;
+     returns setup instructions if none is running)
+```
+
+#### Recipe 12: "Contribute an orphan crop my community grows"
+
+```
+1. list_orphan_crop_requests()
+   → the WANTED_TRAITS.yaml bounty list (fonio, bambara groundnut, enset, grass pea, quinoa)
+2. (open a PR adding the trait to TRAIT_ATLAS per CONTRIBUTING.md '# ORPHAN CROPS BOUNTY')
+```
+
+#### Configuration (environment variables)
+
+| Variable | Default | Controls |
+|---|---|---|
+| `CULTIVARS_LEDGER_DIR` | `./phenotypes` | Where `submit_phenotype_observation` writes and `query_community_phenotypes` reads. Point it at a git working copy for PR-based submission, or a shared volume for a local network. |
+| `CULTIVARS_SNAPSHOTS_DIR` | `./snapshots` | Where `export_offline_snapshot` writes. |
+| `CULTIVARS_IPFS_API` | `http://127.0.0.1:5001` | The kubo HTTP API endpoint `pin_observation_to_ipfs` talks to. |
 
 ---
 
@@ -614,6 +770,59 @@ The internal `_get_with_retry` helper handles 429s automatically. If you're orch
 
 Check Python version compatibility — the CI matrix runs 3.10 / 3.11 / 3.12. Some `httpx.MockTransport` behaviors differ slightly between Python minor versions.
 
+### "submit_phenotype_observation didn't open a pull request"
+
+By design. The tool prepares the artifact (writes the YAML, returns a content
+hash and PR instructions) but **never uses GitHub credentials at runtime** — you
+commit the file under `phenotypes/` and open the PR yourself. This keeps review
+and attribution in human hands. Set `CULTIVARS_LEDGER_DIR` to a git working copy
+to make that step a one-liner.
+
+### "submit_phenotype_observation rejected my trait_category / species"
+
+`trait_category` must match an atlas category (`list_trait_categories`) or an
+organellar trait (`cms`, `plastid_herbicide_resistance`, `plastid_photosynthesis`).
+`species` must be a recognized Ensembl species **or** an orphan-crop species named
+in the atlas (e.g. `eragrostis_tef`). A genuine typo is rejected with the list of
+errors and nothing is written — fix and resubmit.
+
+### "verify_observation_integrity says verified: false"
+
+Three honest causes, each reported distinctly: (1) the observation carries no
+signature (unsigned data is still valid — it just lacks attribution proof);
+(2) the key/signature couldn't be decoded (use `ed25519:<hex>` or base64);
+(3) the signature doesn't match — the observation was altered after signing, or
+the wrong public key was supplied. Re-derive the `canonical_form` from
+`submit_phenotype_observation` and sign exactly those UTF-8 bytes.
+
+### "pin_observation_to_ipfs returns a fallback, not a CID"
+
+No kubo node was reachable. Install IPFS (https://docs.ipfs.tech/install/), run
+`ipfs daemon`, or point `CULTIVARS_IPFS_API` at a reachable gateway, then retry.
+The observation remains valid without a CID — pinning is an enhancement.
+
+### "resolve_accession returns match_count: 0"
+
+GRIN-Global's public REST schema varies by deployment, and not every folk name
+maps cleanly. A zero-match result with the manual-search fallback link is a
+legitimate honest answer, not a bug. Try a scientific name or a broader query, or
+search directly at https://npgsweb.ars-grin.gov/gringlobal/search.
+
+### "estimate_gwas_power gave a huge required-N"
+
+That's usually correct: the Bonferroni correction over millions of SNPs makes the
+genome-wide threshold very strict. The number is order-of-magnitude guidance for
+an idealized additive common-variant model. Real plant GWAS uses mixed models that
+correct for kinship/population structure, which **raises** required N further — so
+treat the figure as a floor, and recruit collaborators.
+
+### "query_organellar_variants — is `Mt`/`Pt` an error?"
+
+No. `Mt` (mitochondrion) and `Pt` (plastid) are first-class Ensembl Plants
+chromosome identifiers. Empty variant scans on them are a data gap (organellar
+variation catalogs are sparse), not a tool error. The curated organellar atlas
+(`trait="cms"` etc.) gives context even when the variant scan is empty.
+
 ---
 
 ## FAQ
@@ -646,10 +855,19 @@ A: Ensembl REST has a documented ~15 req/s soft limit. The `_get_with_retry` hel
 A: Cultivars is the *desk-side* companion. For offline use, see [TinyLLamaFarmer](https://github.com/CopyleftCultivars/TinyLLamaFarmer) (offline natural-farming AI) and the [gemma4-natural-farming](https://huggingface.co/CopyleftCultivars/gemma4-natural-farming-gguf) open-weight model. They run on a phone without connectivity.
 
 **Q: Can I extend the trait atlas?**
-A: Yes. Edit `TRAIT_ATLAS` in `server.py`, then regenerate `atlas_evidence.json` via `evals/atlas_audit.py`. PRs welcome — we add trait categories in response to grower-scientist requests.
+A: Yes. Edit `TRAIT_ATLAS` in `server.py`, then regenerate `atlas_evidence.json` via `evals/atlas_audit.py`. PRs welcome — we add trait categories in response to grower-scientist requests. For underrepresented crops, see the `# ORPHAN CROPS BOUNTY` section of [CONTRIBUTING.md](../CONTRIBUTING.md) and `list_orphan_crop_requests`.
 
 **Q: What's the license?**
-A: This is a fork; the upstream EVEE MCP project's license applies. Copyleft Cultivars's own work is open-source under permissive licenses (Apache 2.0 / MIT depending on project), consistent with the org's free-software ethos.
+A: Two licenses, deliberately. The **code** is Apache-2.0 ([LICENSE](../LICENSE)). The **community-contributed data** in `phenotypes/` — and any derivative database — is ODbL-1.0 ([DATA_LICENSE.md](../DATA_LICENSE.md)), an open-data *copyleft* license (the same model OpenStreetMap uses). A permissive license on data would let anyone enclose the commons in a proprietary database; ODbL's share-alike requirement keeps it open.
+
+**Q: Is there a token, coin, or wallet involved in contributing?**
+A: No — and there deliberately never will be. Attribution uses Ed25519 signatures, which build a verifiable, pseudonymous *scientific* CV tied to a keypair. There is no cryptocurrency, utility token, or on-chain storage; financializing contributions distorts incentives and adds regulatory overhead incompatible with nonprofit operations.
+
+**Q: Where do my observations go? Do they leave my machine?**
+A: `submit_phenotype_observation` writes a YAML to a local directory (`CULTIVARS_LEDGER_DIR`, default `./phenotypes/`) — nothing leaves your machine until *you* open a pull request. You can run a fully private local ledger and decide later what to share. IPFS pinning (opt-in, via `pin_observation_to_ipfs`) is the only step that publishes content, and only if you run it.
+
+**Q: How accurate is `estimate_gwas_power`?**
+A: It's transparent order-of-magnitude guidance, not a formal power analysis. It assumes unrelated individuals, a single common causal variant, a balanced binary phenotype, and no population structure, with a Bonferroni threshold over an approximate genome-wide SNP count. The response surfaces the formula and every assumption. Real plant GWAS needs mixed-model kinship/structure correction, which raises the required sample size.
 
 ---
 
@@ -659,15 +877,25 @@ A: This is a fork; the upstream EVEE MCP project's license applies. Copyleft Cul
 |---|---|
 | **BT/BD allele** | The cannabis chromosome-6 locus where BT (functional THCAS) and BD (functional CBDAS) alleles determine chemotype Type I/II/III |
 | **Chemotype I/II/III** | Cannabis classification: Type I = THC-dominant, Type II = balanced, Type III = CBD-dominant (hemp-compliant) |
+| **CMS** | Cytoplasmic Male Sterility — maternally-inherited mitochondrial trait used to produce hybrid seed; queried via `query_organellar_variants` |
 | **Compara** | Ensembl's protein-tree-based comparative genomics resource — powers `get_orthologs` |
 | **CS10** | Cannabis sativa reference genome v10 (Grassa et al. 2021), NCBI GCF_900626175.2 |
+| **Ed25519** | The elliptic-curve signature scheme used for observation attribution — a verifiable, pseudonymous scientific credential, not a financial instrument |
+| **Fst** | Wright's fixation index — a 0–1 measure of allele-frequency differentiation between subpopulations (e.g. Indica vs Japonica rice); surfaced by `population_context=True` |
+| **GRIN-Global** | USDA ARS open germplasm/accession system (600,000+ holdings); `resolve_accession` bridges folk seed names to its formal IDs |
+| **GWAS power** | The probability a study detects a true trait–locus association at a given sample size; `estimate_gwas_power` reports the sample size needed |
 | **GO** | Gene Ontology — controlled vocabulary for gene function (process / function / component) |
 | **GO evidence code** | Tag on a GO annotation indicating how it was derived (EXP/IDA = experimentally validated; IEA/ISS = inferred) |
 | **HGVS** | Human Genome Variation Society nomenclature for variants (also used in plants) |
 | **High_curated** | Atlas evidence tier — gene has a UniProt/SWISSPROT manually-curated entry |
+| **IPFS** | InterPlanetary File System — content-addressed, decentralized storage; `pin_observation_to_ipfs` returns a permanent CID for an observation |
 | **KNF** | Korean Natural Farming — natural-farming methodology emphasizing indigenous microorganisms (IMO) |
 | **Kannapedia** | Medicinal Genomics's public cannabis-strain database |
+| **Ledger** | The community phenotype store under `phenotypes/` (ODbL-1.0); written by `submit_phenotype_observation`, read by `query_community_phenotypes` |
 | **NAM** | Nested Association Mapping — 26-line maize founder panel (McMullen 2009) |
+| **ODbL** | Open Database License — the open-data *copyleft* license (share-alike) covering ledger data; same model as OpenStreetMap |
+| **Organellar (Mt/Pt)** | The mitochondrial (`Mt`) and plastid/chloroplast (`Pt`) genomes — valid Ensembl chromosomes, maternally inherited |
+| **Orphan crop** | A regionally-vital crop underrepresented in funded genomics (teff, fonio, cowpea, finger millet, amaranth…); see `list_orphan_crop_requests` |
 | **PMID** | PubMed ID — unique identifier for a biomedical paper |
 | **PMR** | Powdery Mildew Resistance |
 | **QPM** | Quality Protein Maize — CIMMYT lysine/tryptophan-enriched maize varieties (Vasal/Villegas, World Food Prize 2000) |

@@ -25,3 +25,10 @@ dist/
 
 # uv lockfile (not currently tracked — uncomment to track for reproducibility)
 uv.lock
+
+# Community-science layer runtime output.
+# The phenotype ledger's STRUCTURE (README + schema) is tracked, but the bulk
+# of contributed observation YAMLs accumulate locally and are submitted via PR
+# rather than committed wholesale. Snapshots are ephemeral offline-bridge blobs.
+phenotypes/**/*.yaml
+snapshots/

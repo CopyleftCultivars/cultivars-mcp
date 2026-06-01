@@ -16,6 +16,7 @@ Part of the [Copyleft Cultivars](https://github.com/CopyleftCultivars) ecosystem
 ## Table of contents
 
 - [What it does](#what-it-does)
+- [Community Science Layer](#community-science-layer)
 - [The trait atlas (30 categories, 123 genes, 73% UniProt-curated)](#the-trait-atlas-30-categories-123-genes-73-uniprot-curated)
 - [Honest framings](#honest-framings-per-copyleft-cultivars-mission)
 - [Veracity verification](#veracity-verification)
@@ -30,7 +31,7 @@ Part of the [Copyleft Cultivars](https://github.com/CopyleftCultivars) ecosystem
 
 ## What it does
 
-19 MCP tools across 5 live databases plus a 30-category, 123-gene curated trait atlas — **73% of which is verified against manually-curated UniProt entries with PubMed citations**.
+28 MCP tools across 5 live databases plus a 35-category curated trait atlas — **73% of the core atlas is verified against manually-curated UniProt entries with PubMed citations**. Beyond read-only genomics, a **community-science layer** adds a phenotype-observation write path, Ed25519 attribution, a GWAS power estimator, GRIN accession resolution, organellar-genome queries, and an offline-bridge export (see the [Community Science Layer](#community-science-layer)).
 
 ### Plant gene + variant tools (Ensembl Plants, ~80 species)
 
@@ -76,6 +77,29 @@ Part of the [Copyleft Cultivars](https://github.com/CopyleftCultivars) ecosystem
 |---|---|
 | `list_maize_nam_founders` | The 27-line maize NAM founder panel (McMullen 2009 + Hufford 2021) — Stiff Stalk, Non-Stiff Stalk, Tropical/Subtropical (CIMMYT + Thai + IITA), Popcorn, Sweet Corn |
 
+### Community Science Layer
+
+The write path and participatory-science tools. **Ledger data is licensed
+[ODbL-1.0](DATA_LICENSE.md)** (open-data copyleft), distinct from the Apache-2.0
+code license — so the commons stays open. Attribution is via Ed25519 signatures,
+**not** any token or cryptocurrency.
+
+| Tool | Use |
+|---|---|
+| `submit_phenotype_observation` | Record a field observation as a schema-v1.0 YAML in the ledger; returns a canonical form to sign + PR instructions (no GitHub creds needed) |
+| `query_community_phenotypes` | Aggregate the ledger: count, measurement distribution, accessions, signed-observation count |
+| `estimate_gwas_power` | "Can my village's 12 varieties detect this locus?" — Bonferroni power calc, pulls live count from the ledger |
+| `verify_observation_integrity` | Verify a detached Ed25519 signature over the canonical observation — pseudonymous scientific attribution |
+| `pin_observation_to_ipfs` | Content-address an observation (+ optional VCF) via a local kubo node; graceful fallback if none |
+| `resolve_accession` | Folk seed name → USDA GRIN-Global accession → Ensembl species string |
+| `query_organellar_variants` | First-class Mt/Pt genome queries + curated organellar atlas (CMS, plastid herbicide resistance, photosynthesis) |
+| `export_offline_snapshot` | Package a trait's genomics into a portable JSON for offline TinyLLamaFarmer use |
+| `list_orphan_crop_requests` | The `WANTED_TRAITS.yaml` orphan-crop contribution bounty list |
+
+`get_variant` and `search_variants_in_region` also gain an optional
+`population_context=True` for per-population allele frequencies + Indica/Japonica
+Fst on richly-covered species.
+
 ## The trait atlas (30 categories, 123 genes, 73% UniProt-curated)
 
 | Category | Representative genes |
@@ -88,6 +112,14 @@ Part of the [Copyleft Cultivars](https://github.com/CopyleftCultivars) ecosystem
 | **Quality** | grain_quality (Wx/Waxy, BADH2/fgr, GBSSII, GLU-A1), cell_wall_biosynthesis (CESA1/4, PAL1, CCR1, CAD5), photosynthesis_c4 (PEPC, NADP-ME, PPDK, RBCS1A) |
 | **Cannabis-specific** *(literature handles)* | cannabinoid_biosynthesis (full 7-enzyme pathway), cannabis_terpene_profile (CsTPS family), hemp_compliance (BT/BD), cannabis_sex_and_photoperiod (MADC2, CsAuto, CsELF3), cannabis_disease_resistance (PMR loci, MLO orthologs) |
 | **Maize-specific** | maize_quality_protein (Opaque-2), maize_disease_resistance (Ht1, Htn1, Rcg1), maize_pest_resistance (Mir1-CP) |
+| **Orphan crops** *(literature handles)* | teff_drought_tolerance (EtDREB/EtNAC), cowpea_heat_tolerance (VuHSP70, VuHSFA2), finger_millet_calcium_accumulation (EcCAX1), pigeon_pea_salinity_tolerance (CcSOS1, CcNHX1), amaranth_c4_photosynthesis (AhPEPC, AhNADP-ME) |
+
+The **30-category / 123-gene core** above is the UniProt-verified set (73%
+high-curated). The 5 **orphan-crop** categories are a newer extension — most of
+those species aren't in Ensembl Plants, so they're literature handles flagged
+with `note` + `evidence_level`, not symbol-resolvable. See
+[`WANTED_TRAITS.yaml`](WANTED_TRAITS.yaml) and the `# ORPHAN CROPS BOUNTY`
+section of [CONTRIBUTING.md](CONTRIBUTING.md) to extend them.
 
 10 canonical entries carry `primary_ref` fields with PubMed citations (DREB1A → Liu 1998 PMID 9707537; SOS1 → Shi 2000 PMID 10823923; SUB1A → Xu 2006 PMID 16900200; PSTOL1 → Gamuyao 2012 PMID 22914168; SD1 → Sasaki 2002 PMID 11961545; TB1 → Doebley 1997 PMID 9087409; ALMT1 → Sasaki 2004 PMID 14871304; SbMATE → Magalhães 2007 PMID 17721535; BADH2 → Bradbury 2005 PMID 17173626; SUB1A → Xu 2006 PMID 16900200) plus `evidence_level` taxonomy (knockout_phenotype / transgenic_complementation / qtl_mapped / etc.).
 
@@ -196,9 +228,34 @@ get_string_interactions(protein_id="SOS1", species="arabidopsis_thaliana")
 # 10 interactions. Top partner: CIPK24 (= SOS2 — the textbook salt-pathway interactor) at score 0.999.
 ```
 
+**The full community-science loop — "my village's rice survived the flood; can we map the locus?"**
+```
+# 1. Resolve the farmer's seed name to a formal accession
+resolve_accession(query="Gobol Sail")
+#    → IRGC accession + ensembl_species="oryza_sativa"
+
+# 2. Record the observation (writes a schema-v1.0 YAML to ./phenotypes/, ODbL-1.0)
+submit_phenotype_observation(
+    accession_id="IRGC_12345", common_name="Gobol Sail", species="oryza_sativa",
+    trait_category="submergence_tolerance", trait_atlas_gene="SUB1A",
+    measurement_type="binary", measurement_value=True,
+    measurement_protocol="14_day_submergence_field", season="kharif_2026")
+#    → returns canonical_form to sign + PR instructions (no GitHub creds needed)
+
+# 3. (Optional) sign it for verifiable, pseudonymous attribution, then verify
+verify_observation_integrity(yaml_path_or_content="phenotypes/.../...yaml")
+
+# 4. Ask whether the community has enough data to detect the locus
+estimate_gwas_power(trait_category="submergence_tolerance", species="oryza_sativa")
+#    → pulls the live ledger count; "you have N, need ~M for 80% power — recruit M-N more"
+
+# 5. Take it offline to the field tool
+export_offline_snapshot(trait_category="submergence_tolerance", species="oryza_sativa")
+```
+
 ## Skill
 
-A Claude Code skill lives at `.claude/skills/cultivars/SKILL.md`. Agents that load it get triggering criteria tuned to grower-scientist questions, routing guidance for the 19 tools, and explicit caveats about which plant genomes are open vs. paywalled.
+A Claude Code skill lives at `.claude/skills/cultivars/SKILL.md`. Agents that load it get triggering criteria tuned to grower-scientist questions, routing guidance for all 28 tools, and explicit caveats about which plant genomes are open vs. paywalled.
 
 ## Data sources
 
@@ -211,13 +268,18 @@ A Claude Code skill lives at `.claude/skills/cultivars/SKILL.md`. Agents that lo
 - **[3K Rice Genomes Project](https://www.nature.com/articles/sdata201418)** — rice population variation
 - **[Plant Reactome](https://plantreactome.gramene.org/)** — plant pathway annotations
 - **[MaizeGDB](https://www.maizegdb.org/)** — maize genome + NAM panel reference
+- **[GRIN-Global](https://npgsweb.ars-grin.gov/gringlobal/search)** (USDA ARS) — 600,000+ germplasm accessions; powers `resolve_accession`
 
 All free. All public. All maintained by people doing real public-sector science.
 
 ## License & lineage
 
-This is a fork of [Goodfire's EVEE MCP](https://github.com/goodfire-ai/evee-mcp) (human ClinVar variants via Evo 2 foundation model embeddings). The structural design — FastMCP, `.claude/skills/`, the `@mcp.tool()` decorator pattern, the SKILL.md "Gotchas" convention — carries through. The data, semantics, and 19 tools are entirely new.
+This is a fork of [Goodfire's EVEE MCP](https://github.com/goodfire-ai/evee-mcp) (human ClinVar variants via Evo 2 foundation model embeddings). The structural design — FastMCP, `.claude/skills/`, the `@mcp.tool()` decorator pattern, the SKILL.md "Gotchas" convention — carries through. The data, semantics, and 28 tools are entirely new.
 
-License terms follow the upstream EVEE MCP project. Copyleft Cultivars's own contributions are open-source under permissive terms consistent with the org's free-software ethos. The org name signals the commitment: **copyleft** (free software / open data that stays open) for **cultivars** (the heritage and improvement of plant varieties). Plant genetics, like seeds, should circulate freely.
+**Two licenses, deliberately:**
+- **Code** — Apache-2.0 ([LICENSE](LICENSE)), consistent with the upstream EVEE MCP lineage and the org's free-software ethos.
+- **Community data** — the phenotype ledger under `phenotypes/` and any derivative database is **ODbL-1.0** ([DATA_LICENSE.md](DATA_LICENSE.md)), an open-data *copyleft* (share-alike) license — the same model OpenStreetMap uses. A permissive license on data would let anyone enclose the commons in a proprietary database; ODbL keeps it open.
+
+The org name signals the commitment: **copyleft** (free software / open data that stays open) for **cultivars** (the heritage and improvement of plant varieties). Plant genetics, like seeds, should circulate freely. Attribution is via Ed25519 signatures — scientific credit, never a token or coin.
 
 🌱 — Caleb DeLeeuw and the Copyleft Cultivars team
