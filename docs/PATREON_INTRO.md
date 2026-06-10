@@ -77,8 +77,8 @@ Plus a **curated trait atlas** of 30 natural-farming-relevant gene families span
 If you have **Claude Code** or **Claude Desktop** installed, you can run Cultivars locally:
 
 ```bash
-git clone https://github.com/CopyleftCultivars/evee-mcp-fork-for-plants.git
-cd evee-mcp-fork-for-plants
+git clone https://github.com/CopyleftCultivars/cultivars-mcp.git
+cd cultivars-mcp
 uv sync
 claude  # opens Claude Code with Cultivars MCP automatically loaded
 ```

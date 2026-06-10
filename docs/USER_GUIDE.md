@@ -14,8 +14,8 @@ researchers using Cultivars to query the open plant-genomics commons.
 You need Python 3.10+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-git clone https://github.com/CopyleftCultivars/evee-mcp-fork-for-plants.git
-cd evee-mcp-fork-for-plants
+git clone https://github.com/CopyleftCultivars/cultivars-mcp.git
+cd cultivars-mcp
 uv sync
 ```
 
@@ -38,11 +38,19 @@ Add to `claude_desktop_config.json`:
   "mcpServers": {
     "cultivars": {
       "command": "uv",
-      "args": ["run", "--directory", "/absolute/path/to/evee-mcp-fork-for-plants", "python3", "server.py"]
+      "args": ["run", "--directory", "/absolute/path/to/cultivars-mcp", "python3", "server.py"]
     }
   }
 }
 ```
+
+### Other AI assistants (OpenAI, Antigravity CLI, Ollama / local models)
+
+Using ChatGPT/OpenAI, Google's Antigravity CLI, or a local model via Ollama (such as
+[gemma4-natural-farming](https://huggingface.co/CopyleftCultivars/gemma4-natural-farming-gguf))?
+The main [README Quick Start](../README.md#-quick-start-start-here--no-coding-needed) has
+copy-paste setup for each, including the `mcphost` bridge needed to connect Ollama models to
+MCP tools.
 
 ### Your first query
 

@@ -4,17 +4,183 @@
 
 Part of the [Copyleft Cultivars](https://github.com/CopyleftCultivars) ecosystem alongside [TinyLLamaFarmer](https://github.com/CopyleftCultivars/TinyLLamaFarmer) (offline natural-farming AI) and [gemma4-natural-farming](https://huggingface.co/CopyleftCultivars/gemma4-natural-farming-gguf) (open-weight KNF/JADAM model).
 
+---
+
+## 🌱 Quick Start (start here — no coding needed)
+
+**What is this, in one sentence?** Cultivars is a free helper that plugs into your AI
+assistant (like Claude or ChatGPT) and gives it the power to look up real plant-gene and
+trait information — and to record your own field observations — so you can ask plant-science
+questions in plain language and get grounded answers.
+
+You **don't** need to be a programmer. You'll copy-paste a few lines once, and then you just
+*talk to your AI assistant normally*. Think of it like installing an app that teaches your AI
+about plant genetics.
+
+> ☝️ **One honest note:** this tool looks things up on the public internet, so it needs a
+> connection to work (even when you use a local AI model). For fully-offline field use, see
+> our [TinyLLamaFarmer](https://github.com/CopyleftCultivars/TinyLLamaFarmer) companion.
+
+### What you'll need
+1. A computer (Mac, Windows, or Linux).
+2. A free tool called **`uv`** — install it by pasting one line into your Terminal:
+   - **Mac / Linux:** `curl -LsSf https://astral.sh/uv/install.sh | sh`
+   - **Windows (PowerShell):** `powershell -c "irm https://astral.sh/uv/install.ps1 | iex"`
+3. One AI assistant from the list below.
+
+### Step 1 — Download Cultivars (paste these three lines)
+```bash
+git clone https://github.com/CopyleftCultivars/cultivars-mcp.git
+cd cultivars-mcp
+uv sync
+```
+That's it — Cultivars is now installed in a folder called `cultivars-mcp`. **Remember where
+that folder is** — a couple of the setups below ask for its full path. To find the full path,
+type `pwd` in the Terminal while you're inside the folder and copy what it prints.
+
+### Step 2 — Connect it to your AI assistant
+Pick the one you use. Each is a one-time setup.
+
+<details open>
+<summary><b>🟣 Claude Code</b> (Anthropic's coding assistant in the Terminal)</summary>
+
+Cultivars already ships the file Claude Code needs. Just open the folder and start Claude:
+```bash
+cd cultivars-mcp
+claude
+```
+Claude Code will ask permission to use the Cultivars tools — say **yes**. Done.
+</details>
+
+<details>
+<summary><b>🟣 Claude Cowork</b> / Claude Desktop app</summary>
+
+1. Open the app's **Settings → Connectors / MCP Servers → Add a custom server** (Cowork and
+   the Claude desktop app both use the same MCP setup).
+2. Paste this, replacing `/FULL/PATH/TO/cultivars-mcp` with the folder path from Step 1:
+   ```json
+   {
+     "mcpServers": {
+       "cultivars": {
+         "command": "uv",
+         "args": ["run", "--directory", "/FULL/PATH/TO/cultivars-mcp", "python3", "server.py"]
+       }
+     }
+   }
+   ```
+3. Save and restart the app. You'll see "cultivars" appear in the tools/connectors list.
+
+*(Exact menu names can vary slightly by version — look for "MCP" or "Connectors" in settings.)*
+</details>
+
+<details>
+<summary><b>🟢 OpenAI / ChatGPT</b> (via the Agents SDK)</summary>
+
+Local helpers like Cultivars connect to OpenAI through the **Agents SDK**. Install it
+(`pip install openai-agents`) and use this short script:
+```python
+from agents import Agent, Runner
+from agents.mcp import MCPServerStdio
+
+async def main():
+    async with MCPServerStdio(
+        params={"command": "uv",
+                "args": ["run", "--directory", "/FULL/PATH/TO/cultivars-mcp", "python3", "server.py"]}
+    ) as cultivars:
+        agent = Agent(name="Plant helper", mcp_servers=[cultivars])
+        result = await Runner.run(agent, "What drought-tolerance genes does sorghum have?")
+        print(result.final_output)
+
+import asyncio; asyncio.run(main())
+```
+Replace `/FULL/PATH/TO/cultivars-mcp` with your folder path. *(ChatGPT's Developer-mode
+connectors also support MCP if you prefer a hosted setup — see OpenAI's connector docs.)*
+</details>
+
+<details>
+<summary><b>🔵 Antigravity CLI</b> (Google's agentic CLI)</summary>
+
+Open Antigravity's MCP settings (look for **MCP Servers** in its config / `mcp_config.json`)
+and add the same server block, with your folder path:
+```json
+{
+  "mcpServers": {
+    "cultivars": {
+      "command": "uv",
+      "args": ["run", "--directory", "/FULL/PATH/TO/cultivars-mcp", "python3", "server.py"]
+    }
+  }
+}
+```
+Save, then start a session — Antigravity will list the Cultivars tools.
+</details>
+
+<details>
+<summary><b>🟠 Ollama + a local model</b> (e.g. our <code>gemma4-natural-farming</code>) — fully on your own machine</summary>
+
+Ollama runs the AI model locally, but it doesn't speak the "MCP" tool language on its own —
+so you add a small free bridge called **`mcphost`** that connects Ollama to Cultivars.
+
+1. Install [Ollama](https://ollama.com) and pull the Copyleft Cultivars model:
+   ```bash
+   ollama pull hf.co/CopyleftCultivars/gemma4-natural-farming-gguf
+   ```
+2. Install the bridge:
+   ```bash
+   go install github.com/mark3labs/mcphost@latest
+   ```
+3. Create a file `cultivars.json` (replace the path):
+   ```json
+   {
+     "mcpServers": {
+       "cultivars": {
+         "command": "uv",
+         "args": ["run", "--directory", "/FULL/PATH/TO/cultivars-mcp", "python3", "server.py"]
+       }
+     }
+   }
+   ```
+4. Start chatting, with the model using the Cultivars tools:
+   ```bash
+   mcphost --config cultivars.json -m "ollama:hf.co/CopyleftCultivars/gemma4-natural-farming-gguf"
+   ```
+
+> 💡 *Honest heads-up:* small local models are great for privacy and offline-leaning use, but
+> they follow tool instructions less reliably than Claude or GPT. If a lookup doesn't fire,
+> ask more directly ("use the find_trait_genes tool for drought tolerance in sorghum") or use
+> a larger model for genomics-heavy sessions.
+</details>
+
+### Step 3 — Try it
+Once connected, just ask your assistant a normal question, for example:
+
+> *"What's known about drought-tolerance genes in sorghum, and do they have rice equivalents?"*
+>
+> *"Record that my Gobol Sail rice survived 14 days of flooding — can the community map that locus yet?"*
+>
+> *"Is my hemp strain rsp13534 a compliant Type III?"*
+
+Your assistant will use Cultivars behind the scenes and answer in plain language. 🎉
+
+**Stuck?** See the friendly [User Guide](docs/USER_GUIDE.md), the [Patreon intro](docs/PATREON_INTRO.md)
+for non-technical members, or the [Troubleshooting section](docs/USER_GUIDE.md#troubleshooting).
+
+---
+
+### More docs
+
 | | |
 |---|---|
 | 👥 **Audience guide** (Patreon members, non-technical) | [docs/PATREON_INTRO.md](docs/PATREON_INTRO.md) |
 | 📖 **User guide** (full reference + recipes) | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) |
 | 🔧 **Contributing** (add traits, regenerate audits) | [CONTRIBUTING.md](CONTRIBUTING.md) |
-| 📜 **License** (Apache 2.0) | [LICENSE](LICENSE) |
+| 📜 **License** (Apache 2.0 code · ODbL-1.0 data) | [LICENSE](LICENSE) · [DATA_LICENSE.md](DATA_LICENSE.md) |
 | 🪞 **Lineage from upstream fork** | [FORK_NOTES.md](FORK_NOTES.md) |
 | 🧾 **Changelog** | [CHANGELOG.md](CHANGELOG.md) |
 
 ## Table of contents
 
+- [🌱 Quick Start](#-quick-start-start-here--no-coding-needed)
 - [What it does](#what-it-does)
 - [Community Science Layer](#community-science-layer)
 - [The trait atlas (30 categories, 123 genes, 73% UniProt-curated)](#the-trait-atlas-30-categories-123-genes-73-uniprot-curated)
@@ -161,11 +327,15 @@ pytest tests/ -v
 
 ## Usage
 
+> New here? The [🌱 Quick Start](#-quick-start-start-here--no-coding-needed) at the top has
+> copy-paste setup for Claude Code, Claude Cowork, OpenAI, Antigravity CLI, and Ollama. This
+> section is the condensed reference.
+
 Requires Python 3.10+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-git clone https://github.com/CopyleftCultivars/evee-mcp-fork-for-plants.git
-cd evee-mcp-fork-for-plants
+git clone https://github.com/CopyleftCultivars/cultivars-mcp.git
+cd cultivars-mcp
 uv sync
 ```
 
@@ -177,16 +347,16 @@ The repo ships a `.mcp.json`; opening the directory triggers the permission prom
 claude
 ```
 
-### Claude Desktop
+### Claude Desktop / Claude Cowork
 
-Add to `claude_desktop_config.json`:
+Add to `claude_desktop_config.json` (or the app's MCP/Connectors settings):
 
 ```json
 {
   "mcpServers": {
     "cultivars": {
       "command": "uv",
-      "args": ["run", "--directory", "/absolute/path/to/evee-mcp-fork-for-plants", "python3", "server.py"]
+      "args": ["run", "--directory", "/absolute/path/to/cultivars-mcp", "python3", "server.py"]
     }
   }
 }
