@@ -2176,3 +2176,51 @@ def test_new_tools_have_descriptions():
     for t in tools:
         if t.name in {"append_observation_to_chain", "import_fieldbook_csv", "anchor_ledger_head"}:
             assert t.description and len(t.description) > 40
+
+
+# ---------------------------------------------------------------------------
+# BIMS template formats (verified against breedwithbims.org / cottongen.org)
+# ---------------------------------------------------------------------------
+
+# phenotype_bims (wide form): #-prefixed trait headings, one row per accession.
+_BIMS_WIDE_CSV = (
+    "accession,unique_id,primary_order,secondary_order,#drought tolerance,#Plant Height\n"
+    "Hopi_Blue,HB_001,1,1,tolerant,180\n"
+    "Oaxacan_Green,OG_002,1,2,susceptible,165\n"
+)
+
+# phenotype_long_form_bims: trait + value columns, one row per accession x trait.
+_BIMS_LONG_CSV = (
+    "accession,unique_id,trait,value,timestamp\n"
+    "Hopi_Blue,HB_001,drought_tolerance,tolerant,2026-05-28\n"
+    "Hopi_Blue,HB_001,plant_height,180,2026-05-28\n"
+)
+
+
+def test_bims_wide_form_hash_prefixed_traits_autodetected(ledger):
+    out = server.import_bims_submission(_BIMS_WIDE_CSV, species="zea_mays", write=False)
+    assert out["ok"] is True and out["layout"] == "wide"
+    # 2 accessions x 2 #-prefixed traits.
+    assert out["imported_count"] == 4
+    cats = {e["trait_category"] for e in out["imported"]}
+    assert "drought_tolerance" in cats and "plant_height_dwarfing" in cats
+    accs = {e["accession_id"] for e in out["imported"]}
+    assert accs == {"Hopi_Blue", "Oaxacan_Green"}
+
+
+def test_bims_wide_form_only_for_bims_source(ledger):
+    # The Field Book importer must NOT silently treat #-columns as traits;
+    # it requires an explicit trait_columns for a wide table.
+    out = server.import_fieldbook_csv(_BIMS_WIDE_CSV, species="zea_mays")
+    assert out["ok"] is False and "long-format" in out["error"]
+
+
+def test_bims_long_form(ledger):
+    out = server.import_bims_submission(_BIMS_LONG_CSV, species="zea_mays", write=False)
+    assert out["ok"] is True and out["layout"] == "long"
+    assert out["imported_count"] == 2
+
+
+def test_match_trait_category_strips_hash_prefix():
+    assert server._match_trait_category("#drought tolerance") == "drought_tolerance"
+    assert server._match_trait_category("#Plant Height") == "plant_height_dwarfing"

@@ -11,7 +11,7 @@ independently auditable ledger; bridges on-farm data collection (Field Book,
 BIMS) into it; and adds a faculty-facing introduction.
 
 ### Tool count: 28 → **35** (+7)
-### Tests: 145 → **164 mocked** (+19) plus an opt-in **live-integration** suite
+### Tests: 145 → **168 mocked** (+23) plus an opt-in **live-integration** suite
 
 ### Added — hash-chain + OpenTimestamps anchoring (crypto**graphic**, not crypto**currency**)
 
@@ -42,9 +42,14 @@ BIMS) into it; and adds a faculty-facing introduction.
   Synonym-based, version-tolerant column resolver; long (one row per observation)
   and wide (`trait_columns`) layouts; fuzzy trait→atlas mapping with a `trait_map`
   override; measurement-type inference; **dry-run by default**, per-row imported /
-  skipped report with reasons. Aligned with
-  `CopyleftCultivars/bims-cultivar-submission` (exact header names reconcile
-  against that template; the resolver already covers common BrAPI-aligned names).
+  skipped report with reasons.
+- Reconciled against the real Field Book and BIMS formats (per
+  breedwithbims.org / cottongen.org / docs.fieldbook.phenoapps.org): the resolver
+  recognises the BIMS identifier columns (`accession`, `unique_id`,
+  `primary_order`, `secondary_order`), and **both BIMS phenotype templates import
+  directly** — `phenotype_long_form_bims` (long) is auto-detected, and
+  `phenotype_bims` (wide) has its `#`-prefixed trait headings auto-detected as
+  traits (trait normalisation strips the `#` prefix and punctuation).
 
 ### Added — docs & CI
 

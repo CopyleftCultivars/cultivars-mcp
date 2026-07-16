@@ -3916,11 +3916,14 @@ def verify_timestamp(ots_path: str, expected_hash: str | None = None) -> dict:
 # straight into the community-science layer — aligned with the
 # CopyleftCultivars/bims-cultivar-submission pipeline.
 #
-# The importer targets the *long / "database"* export shape (one row per
-# observation: an id column, a trait column, a value column) because it is the
-# BrAPI-standard, unambiguous form both tools can produce. A *wide* table (one
-# column per trait) is supported when the caller names the trait columns
-# explicitly via `trait_columns`.
+# Supported shapes (verified against the Field Book + BIMS docs):
+#   * long / "database" (one row per observation: an id, a trait column, a value
+#     column) — Field Book Database export; BIMS phenotype_long_form_bims.
+#   * wide (one column per trait) — BIMS phenotype_bims uses `#`-prefixed trait
+#     headings, which are auto-detected; any other wide table works when the
+#     caller names the trait columns via `trait_columns`.
+# BIMS identifier columns are accession / unique_id / primary_order /
+# secondary_order (the plot-order pair is ignored by the ledger schema).
 #
 # Every row is funneled through submit_phenotype_observation, so it inherits the
 # exact same validation, canonicalisation, content-hashing and (optional) write
@@ -3954,16 +3957,20 @@ _COLUMN_SYNONYMS: dict[str, list[str]] = {
     "season": ["season", "year", "planting_season", "growing_season"],
 }
 
-# Preset default id column per source (used when nothing better resolves).
-_SOURCE_PRESETS = {
-    "fieldbook": {"prefer_unit": "unique_id"},
-    # PROVISIONAL: reconcile the exact BIMS header names against the real
-    # template in CopyleftCultivars/bims-cultivar-submission. The synonym-based
-    # resolver already handles the common BrAPI-aligned column names; update
-    # _COLUMN_SYNONYMS if the template uses names not listed above.
-    "bims": {"prefer_unit": "observationunit_id"},
-    "generic": {"prefer_unit": "unique_id"},
-}
+# Verified format notes (breedwithbims.org / cottongen.org BIMS docs;
+# docs.fieldbook.phenoapps.org):
+#   * BIMS identifier columns are `accession`, `unique_id`, `primary_order`,
+#     `secondary_order` (all renamable in the downloaded template; the last two
+#     are plot design — plot/row — and aren't needed by the ledger schema).
+#   * BIMS `phenotype_bims` (wide form): trait descriptors are column headings
+#     with a `#` prefix, one row per accession.
+#   * BIMS `phenotype_long_form_bims` (long form): a `trait` column + a `value`
+#     column, one row per accession x trait.
+#   * Field Book field files carry `unique_id` + a primary/secondary order; its
+#     "database" export is long (trait + value plus person/location/timestamp).
+# The synonym resolver above covers these names; the `#`-prefixed wide-form
+# traits are auto-detected for source="bims" in _import_tabular.
+_BIMS_TRAIT_PREFIX = "#"
 
 
 def _norm_header(h: str) -> str:
@@ -3986,18 +3993,20 @@ def _match_trait_category(raw: str, trait_map: dict | None = None) -> str | None
     """Resolve a free-text field trait name to an atlas/organellar trait key."""
     if not raw:
         return None
-    key = raw.strip()
+    key = raw.strip().lstrip("#").strip()  # BIMS wide-form traits carry a '#' prefix
     if trait_map:
-        lowered = {str(k).strip().lower(): v for k, v in trait_map.items()}
+        lowered = {str(k).strip().lstrip("#").strip().lower(): v for k, v in trait_map.items()}
         if key.lower() in lowered:
             mapped = str(lowered[key.lower()]).strip()
-            norm_mapped = mapped.lower().replace(" ", "_").replace("-", "_")
+            norm_mapped = _norm_header(mapped)
             if _valid_trait_category(norm_mapped):
                 return norm_mapped
             # An explicit mapping to a non-exact name still gets fuzzy-resolved
             # below (e.g. 'plant_height' -> 'plant_height_dwarfing').
             key = mapped
-    norm = key.lower().replace(" ", "_").replace("-", "_")
+    # _norm_header collapses spaces, dashes, '#', and other punctuation to '_',
+    # so 'Plant Height', '#Plant-Height', 'plant height' all normalise alike.
+    norm = _norm_header(key)
     if _valid_trait_category(norm):
         return norm
     pool = list(TRAIT_ATLAS) + list(ORGANELLAR_TRAITS)
@@ -4067,8 +4076,16 @@ def _import_tabular(
         return {"ok": False, "error": f"too many rows ({len(rows)} > {_MAX_IMPORT_ROWS}); split the file"}
 
     cols = _resolve_columns(header)
-    # Long format when we can find both a trait column and a value column.
+    # Long format when we can find both a trait column and a value column
+    # (Field Book "database" export; BIMS phenotype_long_form_bims).
     long_format = "trait" in cols and "value" in cols
+    # BIMS phenotype_bims (wide form): trait descriptors are column headings with
+    # a '#' prefix. Auto-detect them as trait columns so the wide template
+    # imports without the caller having to enumerate every trait.
+    if not long_format and not trait_columns and source == "bims":
+        hash_cols = [h for h in header if h.strip().startswith(_BIMS_TRAIT_PREFIX)]
+        if hash_cols:
+            trait_columns = hash_cols
     if not long_format and not trait_columns:
         return {
             "ok": False,
@@ -4076,9 +4093,9 @@ def _import_tabular(
             "resolved_columns": cols,
             "header": header,
             "hint": (
-                "Export from Field Book in 'Database' (long) format, or pass "
-                "trait_columns=[...] to import a wide table where each named column "
-                "is a trait."
+                "Export from Field Book in 'Database' (long) format; for BIMS use "
+                "phenotype_long_form_bims, or phenotype_bims with '#'-prefixed trait "
+                "columns; or pass trait_columns=[...] for any other wide table."
             ),
         }
 
@@ -4136,7 +4153,7 @@ def _import_tabular(
             measurement_type=mtype,
             measurement_value=mval,
             measurement_unit=unit or None,
-            measurement_protocol=(row.get(cols.get("protocol", ""), None) if cols.get("protocol") else None) or f"fieldbook:{trait_raw}",
+            measurement_protocol=(row.get(cols.get("protocol", ""), None) if cols.get("protocol") else None) or f"{source}:{trait_raw.lstrip('#').strip()}",
             agroecological_zone=(zone or None),
             season=(season or None),
             submitted=_submitted(row),
@@ -4240,14 +4257,21 @@ def import_bims_submission(
 
     BIMS (Breeding Information Management System) is the breeding-data path in
     the Copyleft Cultivars ecosystem — see
-    CopyleftCultivars/bims-cultivar-submission. This maps a BIMS submission
-    table into the ledger's observation schema using the same BrAPI-aligned
-    column resolver as import_fieldbook_csv.
+    CopyleftCultivars/bims-cultivar-submission. This maps a BIMS phenotype
+    submission into the ledger's observation schema through the same validation
+    path as import_fieldbook_csv.
 
-    Column-name resolution is synonym-based and version-tolerant; if a real
-    BIMS template uses header names not yet recognised, pass an explicit
-    trait_map (and/or trait_columns for a wide layout) — or the resolver's
-    synonym table can be extended.
+    Handles both BIMS phenotype templates directly:
+      * `phenotype_long_form_bims` (long): a `trait` column + a `value` column,
+        one row per accession x trait — auto-detected.
+      * `phenotype_bims` (wide): trait descriptors are column headings with a
+        `#` prefix, one row per accession — the `#`-prefixed columns are
+        auto-detected as traits (no need to pass trait_columns).
+    BIMS identifier columns (`accession`, `unique_id`, `primary_order`,
+    `secondary_order`) are recognised by the synonym resolver; `accession` /
+    `unique_id` populate the ledger record and the plot-order columns are
+    ignored. If a template renames columns, pass trait_map / trait_columns to
+    override.
 
     Defaults to a DRY RUN. Args mirror import_fieldbook_csv.
     """
