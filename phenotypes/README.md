@@ -17,9 +17,12 @@ All data in this directory is licensed **ODbL-1.0** (open-data copyleft) — see
 
 ```
 phenotypes/
+├── CHAIN.jsonl                         # append-only hash-chain spine (see below)
+├── CHAIN.head.{seq}.ots                # OpenTimestamps proof for a chain head
 └── {species}/
     └── {accession_id}/
-        └── {trait}_{date}.yaml
+        ├── {trait}_{date}.yaml
+        └── {trait}_{date}.yaml.ots     # optional per-record timestamp proof
 ```
 
 For example:
@@ -63,9 +66,41 @@ and are contributed deliberately via **pull request**, not bulk-committed. This
 keeps attribution and review in the loop and lets growers run a private local
 ledger before deciding what to share.
 
-## Integrity
+## Integrity & attribution
 
 Sign observations with an Ed25519 keypair to attach a verifiable, pseudonymous
 attribution (`provenance.submitter_pubkey` + `signature`). Verify any record
-with `verify_observation_integrity`. This is scientific credit, **not** a
-financial instrument — no tokens, no chain.
+with `verify_observation_integrity`. This is scientific credit — a CV tied to a
+keypair, **not** money.
+
+## The cryptographic ledger
+
+The YAMLs above are individually content-hashed and optionally signed. Two tools
+turn that pile of files into a tamper-evident, independently auditable ledger —
+this is the "crypto ledger, not just YAML" spine:
+
+1. **Hash-chain (`CHAIN.jsonl`).** `append_observation_to_chain` links each
+   observation into an append-only log where every entry commits to the previous
+   one (`prev_entry_hash → entry_hash`), exactly like Git or a Merkle log. Any
+   later edit to a chained observation — or any attempt to reorder or splice
+   history — breaks the chain and is caught by `verify_ledger_chain`. No network,
+   no fees; the chain is a plain JSONL file you can read and audit by hand.
+
+2. **OpenTimestamps anchor (Bitcoin).** `anchor_ledger_head` (or, per-record,
+   `anchor_observation_timestamp`) submits a hash to the free public
+   OpenTimestamps calendar servers and saves a detached `.ots` proof. Because the
+   chain head commits to the entire history, one anchor timestamps the whole
+   ledger. This proves *when* the data existed by committing its hash into the
+   Bitcoin blockchain — a one-way proof-of-existence. Verify structure with
+   `verify_timestamp`; for full Bitcoin confirmation run the reference client
+   (`pip install opentimestamps-client`, then `ots upgrade` / `ots verify`).
+
+### Crypto**graphic**, not crypto**currency**
+
+To be explicit: there is **no token, no coin, no wallet, no gas, nothing to
+buy**. "Crypto" here means cryptography — SHA-256 hash-chaining and a
+proof-of-existence timestamp. OpenTimestamps uses Bitcoin only as a public,
+append-only clock; contributing to or verifying the ledger costs nothing and
+requires no account. The data stays licensed **ODbL-1.0** so derivative
+databases must stay open — the anchor makes the commons *auditable*, not
+*financialized*.

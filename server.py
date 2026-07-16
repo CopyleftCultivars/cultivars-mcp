@@ -33,8 +33,10 @@ does not replace them.
 
 import concurrent.futures
 import copy
+import csv
 import datetime
 import hashlib
+import io
 import json
 import math
 import os
@@ -3434,6 +3436,825 @@ def pin_observation_to_ipfs(yaml_path: str, vcf_path: str | None = None) -> dict
         "wrote_cid_to_yaml": wrote_back,
         "note": "The observation_cid is now the canonical, tamper-evident identifier.",
     }
+
+
+# ===========================================================================
+# Hash-chained ledger + OpenTimestamps anchoring
+#
+# The YAML observations above are each content-hashed and optionally Ed25519-
+# signed. This section turns that pile of files into an *append-only, tamper-
+# evident ledger* and anchors it to an external, trustless clock:
+#
+#   - append_observation_to_chain  — link an observation into a hash-chain
+#   - verify_ledger_chain          — walk the chain, detect any tampering
+#   - anchor_ledger_head           — OpenTimestamps-stamp the chain head (Bitcoin)
+#   - anchor_observation_timestamp — OpenTimestamps-stamp a single observation
+#   - verify_timestamp             — structurally verify a .ots proof
+#
+# Design choice (see phenotypes/README.md): this is a *cryptographic* ledger,
+# NOT a *cryptocurrency*. There is no token, no wallet, no gas, no coin to buy.
+# The hash-chain is a Git-like Merkle spine; OpenTimestamps proves *when* data
+# existed by committing its hash into the Bitcoin blockchain via free public
+# calendar servers — a one-way proof-of-existence, not a financial instrument.
+# This keeps the ODbL open-data commons ethos intact while making the ledger
+# independently auditable by anyone, with no trust in Copyleft Cultivars.
+#
+# Both the chain and the timestamp anchor degrade gracefully: the chain is a
+# plain append-only JSONL that needs no network, and the anchoring tools return
+# a structured fallback (never raise) when no calendar is reachable.
+# ===========================================================================
+
+CHAIN_FILE_NAME = "CHAIN.jsonl"
+
+# All-zero genesis pointer for the first entry's prev_entry_hash.
+GENESIS_PREV_HASH = "sha256:" + "0" * 64
+
+# OpenTimestamps public calendar servers (free, no auth). Override with a
+# comma-separated CULTIVARS_OTS_CALENDARS. We submit a digest and save the
+# returned pending proof; full Bitcoin confirmation is folded in later with the
+# reference `ots` client (opentimestamps-client).
+OTS_CALENDAR_URLS = [
+    u.strip()
+    for u in os.environ.get(
+        "CULTIVARS_OTS_CALENDARS",
+        "https://a.pool.opentimestamps.org,https://b.pool.opentimestamps.org",
+    ).split(",")
+    if u.strip()
+]
+
+# Detached .ots file framing (OpenTimestamps v1). A detached proof is
+# MAGIC + version + file-hash-op + digest + <serialized calendar timestamp>.
+# A single calendar's /digest response IS that serialized timestamp for the
+# submitted digest, so concatenating these produces a standards-compliant .ots
+# that the reference client can upgrade and verify.
+_OTS_HEADER_MAGIC = b"\x00OpenTimestamps\x00\x00Proof\x00\xbf\x89\xe2\xe8\x84\xe8\x92\x94"
+_OTS_MAJOR_VERSION = b"\x01"
+_OTS_OP_SHA256 = b"\x08"  # OpSHA256 tag in the OTS opcode table
+
+
+def _chain_file() -> pathlib.Path:
+    """Path to the append-only hash-chain spine for the ledger."""
+    return _ledger_dir() / CHAIN_FILE_NAME
+
+
+def _chain_entry_hash(entry: dict) -> str:
+    """SHA-256 over an entry's canonical bytes, excluding its own entry_hash."""
+    clean = {k: v for k, v in entry.items() if k != "entry_hash"}
+    payload = json.dumps(clean, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _read_chain() -> list[dict]:
+    """Load the hash-chain (list of entries) from CHAIN.jsonl, or []."""
+    path = _chain_file()
+    if not path.exists():
+        return []
+    entries: list[dict] = []
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entries.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue  # a corrupt line is caught structurally by verify_ledger_chain
+    return entries
+
+
+def _ots_calendar_client(base_url: str) -> httpx.Client:
+    """HTTP client for an OpenTimestamps calendar server (test seam)."""
+    return httpx.Client(
+        base_url=base_url,
+        timeout=30,
+        headers={
+            "User-Agent": "cultivars-mcp-ots/1.0",
+            "Accept": "application/vnd.opentimestamps.v1",
+        },
+    )
+
+
+def _submit_digest_to_calendar(digest: bytes, base_url: str) -> bytes:
+    """POST a 32-byte digest to a calendar's /digest endpoint; return the proof."""
+    with _ots_calendar_client(base_url) as client:
+        resp = client.post("/digest", content=digest)
+        resp.raise_for_status()
+        return resp.content
+
+
+def _build_ots_proof(digest: bytes, calendar_timestamp: bytes) -> bytes:
+    """Assemble a detached OTS proof from a sha256 digest + calendar timestamp."""
+    if len(digest) != 32:
+        raise ValueError("sha256 digest must be 32 bytes")
+    return _OTS_HEADER_MAGIC + _OTS_MAJOR_VERSION + _OTS_OP_SHA256 + digest + calendar_timestamp
+
+
+def _parse_ots_proof(data: bytes) -> dict:
+    """Structurally parse a detached OTS proof; raise ValueError if malformed."""
+    if not data.startswith(_OTS_HEADER_MAGIC):
+        raise ValueError("not an OpenTimestamps detached proof (bad magic header)")
+    rest = data[len(_OTS_HEADER_MAGIC):]
+    if len(rest) < 2 + 32:
+        raise ValueError("proof truncated before file digest")
+    version = rest[0]
+    op = rest[1:2]
+    if op != _OTS_OP_SHA256:
+        raise ValueError("unsupported file-hash op (expected SHA256)")
+    digest = rest[2:34]
+    return {
+        "version": version,
+        "file_hash_op": "sha256",
+        "digest_hex": digest.hex(),
+        "timestamp_len": len(rest) - 34,
+    }
+
+
+def _stamp_digest(digest_hex: str) -> dict:
+    """Submit a hex digest to OTS calendars; return {ok, calendar, proof} or fallback."""
+    try:
+        digest = bytes.fromhex(digest_hex)
+    except ValueError:
+        return {"ok": False, "error": f"digest is not valid hex: {digest_hex!r}"}
+    if len(digest) != 32:
+        return {"ok": False, "error": "digest must be a 32-byte (sha256) hex string"}
+    if not OTS_CALENDAR_URLS:
+        return {
+            "ok": False,
+            "error": "no OpenTimestamps calendars configured",
+            "hint": "set CULTIVARS_OTS_CALENDARS to a comma-separated list of calendar URLs",
+        }
+    errors: dict[str, str] = {}
+    for cal in OTS_CALENDAR_URLS:
+        try:
+            ts = _submit_digest_to_calendar(digest, cal)
+            return {"ok": True, "calendar": cal, "proof": _build_ots_proof(digest, ts), "pending": True}
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException, httpx.TransportError) as exc:
+            errors[cal] = f"unreachable: {exc}"
+        except Exception as exc:  # noqa: BLE001 - one bad calendar shouldn't abort the rest
+            errors[cal] = str(exc)
+    return {"ok": False, "ots_available": False, "fallback": True, "calendars_tried": errors}
+
+
+@mcp.tool()
+def append_observation_to_chain(yaml_path: str, recorded_at: str | None = None) -> dict:
+    """Link a phenotype observation into the append-only ledger hash-chain.
+
+    Reads an observation YAML, computes its canonical content hash, and appends
+    a new entry to CHAIN.jsonl that cryptographically links to the previous
+    head (prev_entry_hash -> entry_hash). Any later edit to a chained
+    observation, or any attempt to reorder/splice history, breaks the chain and
+    is caught by verify_ledger_chain. This is the "crypto ledger instead of just
+    YAML" spine: a Git-like Merkle log, with no token or blockchain fees.
+
+    Idempotent: re-appending an observation whose content_hash already exists in
+    the chain is a no-op.
+
+    Args:
+        yaml_path: Path to the observation YAML to chain.
+        recorded_at: Optional ISO timestamp override (default: now, UTC). Exposed
+            mainly so the append is reproducible in tests.
+    """
+    if _yaml is None:
+        return {"ok": False, "error": "PyYAML is not installed; cannot read the observation.", "hint": "pip install pyyaml"}
+    obs_path = pathlib.Path(yaml_path)
+    if not obs_path.exists():
+        return {"ok": False, "error": f"file not found: {yaml_path}"}
+    try:
+        obs = _yaml.safe_load(obs_path.read_text())
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"could not parse YAML: {exc}"}
+    if not isinstance(obs, dict):
+        return {"ok": False, "error": "observation is not a mapping"}
+
+    content_hash = _content_hash(obs)
+    chain = _read_chain()
+
+    for existing in reversed(chain):
+        if existing.get("content_hash") == content_hash:
+            return {
+                "ok": True,
+                "already_chained": True,
+                "seq": existing.get("seq"),
+                "entry_hash": existing.get("entry_hash"),
+                "note": "Observation already present in the chain; no new entry appended.",
+            }
+
+    prev_hash = chain[-1]["entry_hash"] if chain else GENESIS_PREV_HASH
+    seq = len(chain)
+    recorded_at = recorded_at or datetime.datetime.now(datetime.timezone.utc).isoformat()
+    entry = {
+        "seq": seq,
+        "content_hash": content_hash,
+        "accession_id": obs.get("accession_id"),
+        "species": obs.get("species"),
+        "trait_category": obs.get("trait_category"),
+        "submitted": obs.get("submitted"),
+        "observation_path": str(obs_path),
+        "prev_entry_hash": prev_hash,
+        "recorded_at": recorded_at,
+    }
+    entry["entry_hash"] = _chain_entry_hash(entry)
+
+    path = _chain_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    return {
+        "ok": True,
+        "already_chained": False,
+        "seq": seq,
+        "entry_hash": entry["entry_hash"],
+        "prev_entry_hash": prev_hash,
+        "content_hash": content_hash,
+        "chain_file": str(path),
+        "chain_length": seq + 1,
+        "next_step": (
+            "Periodically call anchor_ledger_head to commit the chain head into "
+            "the Bitcoin blockchain via OpenTimestamps — a trustless proof of "
+            "when the ledger reached this state."
+        ),
+    }
+
+
+@mcp.tool()
+def verify_ledger_chain(check_files: bool = True) -> dict:
+    """Walk the ledger hash-chain and report any tampering.
+
+    Recomputes every entry_hash and checks that each entry's prev_entry_hash
+    matches the previous entry — proving the append-only history is intact. With
+    check_files=True, also re-hashes each referenced observation YAML and
+    confirms its content_hash still matches what was chained (detects edits to a
+    committed observation after the fact).
+
+    Returns {ok, valid, chain_length, first_break, file_mismatches, ...}.
+    """
+    chain = _read_chain()
+    if not chain:
+        return {
+            "ok": True,
+            "valid": True,
+            "chain_length": 0,
+            "chain_file": str(_chain_file()),
+            "note": "Chain is empty — nothing to verify yet.",
+        }
+
+    first_break = None
+    prev_hash = GENESIS_PREV_HASH
+    for i, entry in enumerate(chain):
+        if entry.get("seq") != i:
+            first_break = {"seq": i, "reason": f"seq mismatch: entry claims seq={entry.get('seq')}, expected {i}"}
+            break
+        if entry.get("prev_entry_hash") != prev_hash:
+            first_break = {"seq": i, "reason": "prev_entry_hash does not match previous entry_hash (chain reordered or spliced)"}
+            break
+        if _chain_entry_hash(entry) != entry.get("entry_hash"):
+            first_break = {"seq": i, "reason": "entry_hash does not match recomputed hash (entry altered)"}
+            break
+        prev_hash = entry.get("entry_hash")
+
+    file_mismatches: list[dict] = []
+    if check_files and _yaml is not None:
+        for entry in chain:
+            op = entry.get("observation_path")
+            if not op:
+                continue
+            p = pathlib.Path(op)
+            if not p.exists():
+                file_mismatches.append({"seq": entry.get("seq"), "path": op, "reason": "observation file missing"})
+                continue
+            try:
+                doc = _yaml.safe_load(p.read_text())
+                if not isinstance(doc, dict) or _content_hash(doc) != entry.get("content_hash"):
+                    file_mismatches.append({"seq": entry.get("seq"), "path": op, "reason": "content_hash changed — observation edited after chaining"})
+            except Exception as exc:  # noqa: BLE001
+                file_mismatches.append({"seq": entry.get("seq"), "path": op, "reason": f"parse error: {exc}"})
+
+    valid = first_break is None and not file_mismatches
+    return {
+        "ok": True,
+        "valid": valid,
+        "chain_length": len(chain),
+        "head_entry_hash": chain[-1].get("entry_hash"),
+        "first_break": first_break,
+        "file_mismatches": file_mismatches or None,
+        "chain_file": str(_chain_file()),
+        "note": (
+            "Chain intact and all observations match their chained hashes."
+            if valid
+            else "Tampering detected — see first_break / file_mismatches."
+        ),
+    }
+
+
+@mcp.tool()
+def anchor_observation_timestamp(yaml_path: str) -> dict:
+    """Anchor an observation to the Bitcoin blockchain via OpenTimestamps.
+
+    Submits the observation's content hash to public OpenTimestamps calendar
+    servers and saves a detached `.ots` proof next to the YAML. This is a
+    trustless proof-of-existence: it proves the observation existed in exactly
+    its current form at a point in time, committed into Bitcoin, with no token,
+    wallet, or fee. The fresh proof is "pending" — run `ots upgrade`
+    (pip install opentimestamps-client) after ~a few hours to fold in the
+    Bitcoin block header, then `ots verify` to confirm it.
+
+    The observation YAML is NOT modified (that would change its content hash);
+    the proof lives in a sidecar `<name>.yaml.ots`. Degrades gracefully: if no
+    calendar is reachable, returns a structured fallback and writes nothing.
+
+    Args:
+        yaml_path: Path to the observation YAML to timestamp.
+    """
+    if _yaml is None:
+        return {"ok": False, "error": "PyYAML is not installed; cannot read the observation.", "hint": "pip install pyyaml"}
+    obs_path = pathlib.Path(yaml_path)
+    if not obs_path.exists():
+        return {"ok": False, "error": f"file not found: {yaml_path}"}
+    try:
+        obs = _yaml.safe_load(obs_path.read_text())
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"could not parse YAML: {exc}"}
+    if not isinstance(obs, dict):
+        return {"ok": False, "error": "observation is not a mapping"}
+
+    content_hash = _content_hash(obs)
+    result = _stamp_digest(content_hash.split(":", 1)[1])
+    if not result.get("ok"):
+        result.setdefault(
+            "instructions",
+            (
+                "No OpenTimestamps calendar reachable. Check network access or set "
+                "CULTIVARS_OTS_CALENDARS to reachable calendar URLs, then retry. The "
+                "observation remains valid without a timestamp proof."
+            ),
+        )
+        return result
+
+    ots_path = obs_path.with_name(obs_path.name + ".ots")
+    ots_path.write_bytes(result["proof"])
+    return {
+        "ok": True,
+        "ots_available": True,
+        "pending": True,
+        "content_hash": content_hash,
+        "calendar": result["calendar"],
+        "ots_path": str(ots_path),
+        "proof_bytes": len(result["proof"]),
+        "note": (
+            "Pending proof saved. Run `ots upgrade " + ots_path.name + "` in a few "
+            "hours to fold in the Bitcoin attestation, then `ots verify` to confirm "
+            "the observation existed by that block's timestamp."
+        ),
+    }
+
+
+@mcp.tool()
+def anchor_ledger_head(recorded_at: str | None = None) -> dict:
+    """OpenTimestamps-anchor the current head of the ledger hash-chain.
+
+    Stamps the newest chain entry's entry_hash into Bitcoin via public
+    OpenTimestamps calendars, saving a detached `.ots` proof under the ledger
+    directory. Because the head hash commits to the entire chain history, one
+    anchor timestamps the whole ledger up to that point — far cheaper than
+    stamping every observation. Degrades gracefully when offline.
+
+    Args:
+        recorded_at: Unused placeholder reserved for reproducible-anchor tests.
+    """
+    chain = _read_chain()
+    if not chain:
+        return {"ok": False, "error": "chain is empty — append at least one observation first with append_observation_to_chain"}
+    head = chain[-1]
+    head_hash = head.get("entry_hash", "")
+    if not head_hash.startswith("sha256:"):
+        return {"ok": False, "error": "chain head has no valid entry_hash"}
+
+    result = _stamp_digest(head_hash.split(":", 1)[1])
+    if not result.get("ok"):
+        result.setdefault(
+            "instructions",
+            (
+                "No OpenTimestamps calendar reachable. Check network access or set "
+                "CULTIVARS_OTS_CALENDARS, then retry. The chain itself is unaffected."
+            ),
+        )
+        return result
+
+    ots_path = _ledger_dir() / f"CHAIN.head.{head.get('seq')}.ots"
+    ots_path.parent.mkdir(parents=True, exist_ok=True)
+    ots_path.write_bytes(result["proof"])
+    return {
+        "ok": True,
+        "ots_available": True,
+        "pending": True,
+        "head_seq": head.get("seq"),
+        "head_entry_hash": head_hash,
+        "chain_length": len(chain),
+        "calendar": result["calendar"],
+        "ots_path": str(ots_path),
+        "note": (
+            "The chain head commits to all " + str(len(chain)) + " entries, so this "
+            "single anchor timestamps the whole ledger. Run `ots upgrade` on the "
+            ".ots file in a few hours, then `ots verify`."
+        ),
+    }
+
+
+@mcp.tool()
+def verify_timestamp(ots_path: str, expected_hash: str | None = None) -> dict:
+    """Structurally verify an OpenTimestamps (.ots) proof.
+
+    Confirms the .ots file is a well-formed detached SHA256 proof and, if
+    expected_hash is given, that it commits to that digest. NOTE: full
+    verification that the timestamp is confirmed in the Bitcoin blockchain
+    requires the reference client — run `ots verify <file>.ots`
+    (pip install opentimestamps-client). A freshly created proof is "pending"
+    until a calendar folds it into a Bitcoin block (~a few hours); `ots upgrade`
+    completes it.
+
+    Args:
+        ots_path: Path to the .ots proof file.
+        expected_hash: Optional 'sha256:<hex>' or bare hex digest the proof
+            should commit to (e.g. an observation's content_hash).
+    """
+    p = pathlib.Path(ots_path)
+    if not p.exists():
+        return {"ok": False, "error": f"file not found: {ots_path}"}
+    try:
+        parsed = _parse_ots_proof(p.read_bytes())
+    except ValueError as exc:
+        return {"ok": False, "well_formed": False, "error": str(exc)}
+
+    result = {
+        "ok": True,
+        "well_formed": True,
+        "version": parsed["version"],
+        "file_hash_op": parsed["file_hash_op"],
+        "committed_digest": "sha256:" + parsed["digest_hex"],
+        "bitcoin_verification": (
+            "Structural check only. Run `ots verify " + p.name + "` (opentimestamps-"
+            "client) for full Bitcoin-anchored confirmation; `ots upgrade` first if pending."
+        ),
+    }
+    if expected_hash:
+        want = expected_hash.split(":", 1)[1] if ":" in expected_hash else expected_hash
+        matches = want.lower() == parsed["digest_hex"].lower()
+        result["matches_expected_hash"] = matches
+        if not matches:
+            result["ok"] = False
+            result["error"] = "proof commits to a different digest than expected_hash"
+    return result
+
+
+# ===========================================================================
+# Field-data ingestion — Field Book / BIMS -> phenotype ledger
+#
+# Growers collect phenotypes in the field with the Field Book app (PhenoApps,
+# github.com/PhenoApps/Field-Book) or submit them through BIMS (a Breeding
+# Information Management System). Both export tabular data. These tools map that
+# tabular data into the ledger's observation schema so on-farm collection flows
+# straight into the community-science layer — aligned with the
+# CopyleftCultivars/bims-cultivar-submission pipeline.
+#
+# The importer targets the *long / "database"* export shape (one row per
+# observation: an id column, a trait column, a value column) because it is the
+# BrAPI-standard, unambiguous form both tools can produce. A *wide* table (one
+# column per trait) is supported when the caller names the trait columns
+# explicitly via `trait_columns`.
+#
+# Every row is funneled through submit_phenotype_observation, so it inherits the
+# exact same validation, canonicalisation, content-hashing and (optional) write
+# path as a hand-entered observation — no second, drifting code path.
+# ===========================================================================
+
+# Header synonyms. Field Book and BIMS name the same concept differently across
+# versions; we resolve case-insensitively against these candidate lists.
+_COLUMN_SYNONYMS: dict[str, list[str]] = {
+    "accession": [
+        "germplasm", "germplasmname", "germplasm_name", "accession", "accession_id",
+        "accession_number", "accession_name", "line", "entry", "genotype", "stock",
+        "cultivar", "variety",
+    ],
+    "unit": [
+        "observationunit_id", "observation_unit_id", "observationunitdbid",
+        "observationunitname", "observation_unit_name", "unique_id", "uniqueid",
+        "plot_id", "plotname", "plot", "obs_unit_id", "unit", "id", "plot_number",
+    ],
+    "common_name": ["common_name", "commonname", "folk_name", "local_name", "name"],
+    "species": ["species", "crop", "organism", "crop_name"],
+    "trait": [
+        "trait", "observation_variable_name", "observationvariablename",
+        "observation_variable", "variable", "trait_name", "traitname", "descriptor",
+    ],
+    "value": ["value", "observation", "phenotype_value", "measurement", "score", "result"],
+    "unit_of_measure": ["unit_of_measure", "value_unit", "units", "unit"],
+    "timestamp": ["timestamp", "date", "observation_timestamp", "obs_time", "recorded", "observationtime"],
+    "protocol": ["protocol", "method", "observation_method", "trait_protocol"],
+    "zone": ["agroecological_zone", "zone", "location", "site", "field", "study", "environment"],
+    "season": ["season", "year", "planting_season", "growing_season"],
+}
+
+# Preset default id column per source (used when nothing better resolves).
+_SOURCE_PRESETS = {
+    "fieldbook": {"prefer_unit": "unique_id"},
+    # PROVISIONAL: reconcile the exact BIMS header names against the real
+    # template in CopyleftCultivars/bims-cultivar-submission. The synonym-based
+    # resolver already handles the common BrAPI-aligned column names; update
+    # _COLUMN_SYNONYMS if the template uses names not listed above.
+    "bims": {"prefer_unit": "observationunit_id"},
+    "generic": {"prefer_unit": "unique_id"},
+}
+
+
+def _norm_header(h: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", (h or "").strip().lower()).strip("_")
+
+
+def _resolve_columns(header: list[str]) -> dict[str, str]:
+    """Map each logical field to the actual header present, by synonym."""
+    normalized = {_norm_header(h): h for h in header}
+    resolved: dict[str, str] = {}
+    for logical, candidates in _COLUMN_SYNONYMS.items():
+        for cand in candidates:
+            if cand in normalized:
+                resolved[logical] = normalized[cand]
+                break
+    return resolved
+
+
+def _match_trait_category(raw: str, trait_map: dict | None = None) -> str | None:
+    """Resolve a free-text field trait name to an atlas/organellar trait key."""
+    if not raw:
+        return None
+    key = raw.strip()
+    if trait_map:
+        lowered = {str(k).strip().lower(): v for k, v in trait_map.items()}
+        if key.lower() in lowered:
+            mapped = str(lowered[key.lower()]).strip()
+            norm_mapped = mapped.lower().replace(" ", "_").replace("-", "_")
+            if _valid_trait_category(norm_mapped):
+                return norm_mapped
+            # An explicit mapping to a non-exact name still gets fuzzy-resolved
+            # below (e.g. 'plant_height' -> 'plant_height_dwarfing').
+            key = mapped
+    norm = key.lower().replace(" ", "_").replace("-", "_")
+    if _valid_trait_category(norm):
+        return norm
+    pool = list(TRAIT_ATLAS) + list(ORGANELLAR_TRAITS)
+    cands = [k for k in pool if norm and (norm in k or k in norm)]
+    # Prefer an exact-token or prefix match if the substring set is ambiguous.
+    if len(cands) > 1:
+        prefer = [k for k in cands if k.startswith(norm)]
+        if len(prefer) == 1:
+            cands = prefer
+    return cands[0] if len(cands) == 1 else None
+
+
+def _infer_measurement(value) -> tuple[str | None, object]:
+    """Infer (measurement_type, coerced_value) from a raw cell value."""
+    s = str(value).strip()
+    if s == "":
+        return None, None
+    try:
+        f = float(s)
+        return "continuous", (int(f) if float(f).is_integer() else f)
+    except ValueError:
+        pass
+    low = s.lower()
+    if low in {"true", "yes", "y", "present", "tolerant", "resistant", "survived", "pass"}:
+        return "binary", True
+    if low in {"false", "no", "n", "absent", "susceptible", "died", "fail"}:
+        return "binary", False
+    return "categorical", s
+
+
+def _parse_csv(csv_content_or_path: str) -> tuple[list[str], list[dict]]:
+    """Parse CSV from raw content or a file path; return (header, rows)."""
+    raw = csv_content_or_path or ""
+    p = pathlib.Path(raw) if len(raw) < 4096 else None
+    try:
+        if p is not None and p.exists():
+            raw = p.read_text()
+    except OSError:
+        pass
+    reader = csv.DictReader(io.StringIO(raw))
+    header = reader.fieldnames or []
+    return list(header), [dict(r) for r in reader]
+
+
+_MAX_IMPORT_ROWS = 5000
+
+
+def _import_tabular(
+    csv_content_or_path: str,
+    source: str,
+    species: str | None,
+    trait_map: dict | None,
+    trait_columns: list[str] | None,
+    accession_prefix: str,
+    write: bool,
+) -> dict:
+    """Shared engine behind import_fieldbook_csv / import_bims_submission."""
+    if _yaml is None and write:
+        return {"ok": False, "error": "PyYAML is not installed; cannot write the ledger.", "hint": "pip install pyyaml"}
+    try:
+        header, rows = _parse_csv(csv_content_or_path)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"could not parse CSV: {exc}"}
+    if not header:
+        return {"ok": False, "error": "CSV has no header row"}
+    if len(rows) > _MAX_IMPORT_ROWS:
+        return {"ok": False, "error": f"too many rows ({len(rows)} > {_MAX_IMPORT_ROWS}); split the file"}
+
+    cols = _resolve_columns(header)
+    # Long format when we can find both a trait column and a value column.
+    long_format = "trait" in cols and "value" in cols
+    if not long_format and not trait_columns:
+        return {
+            "ok": False,
+            "error": "could not detect a long-format (trait,value) layout",
+            "resolved_columns": cols,
+            "header": header,
+            "hint": (
+                "Export from Field Book in 'Database' (long) format, or pass "
+                "trait_columns=[...] to import a wide table where each named column "
+                "is a trait."
+            ),
+        }
+
+    def _row_species(row: dict) -> str | None:
+        if species:
+            return _normalize_species(species)
+        if "species" in cols and row.get(cols["species"]):
+            return _normalize_species(row[cols["species"]])
+        return None
+
+    def _accession(row: dict) -> tuple[str, str]:
+        acc = row.get(cols.get("accession", ""), "").strip() if cols.get("accession") else ""
+        unit = row.get(cols.get("unit", ""), "").strip() if cols.get("unit") else ""
+        name = row.get(cols.get("common_name", ""), "").strip() if cols.get("common_name") else ""
+        common = name or acc or unit or "unknown"
+        if acc:
+            accession_id = acc if ":" in acc else acc  # keep formal IDs verbatim
+        else:
+            accession_id = f"{accession_prefix}{(unit or common)}"
+        return accession_id, common
+
+    def _submitted(row: dict) -> str | None:
+        ts = row.get(cols.get("timestamp", ""), "") if cols.get("timestamp") else ""
+        if not ts:
+            return None
+        # Accept ISO date or datetime; keep just the date component.
+        m = re.match(r"(\d{4}-\d{2}-\d{2})", ts.strip())
+        return m.group(1) if m else None
+
+    imported: list[dict] = []
+    skipped: list[dict] = []
+
+    def _emit(row_no, row, trait_raw, value_raw):
+        sp = _row_species(row)
+        if not sp:
+            skipped.append({"row": row_no, "reason": "no species (pass species= or add a species column)"})
+            return
+        category = _match_trait_category(trait_raw, trait_map)
+        if not category:
+            skipped.append({"row": row_no, "trait": trait_raw, "reason": "trait did not map to a known atlas/organellar category (use trait_map=)"})
+            return
+        mtype, mval = _infer_measurement(value_raw)
+        if mtype is None:
+            skipped.append({"row": row_no, "trait": trait_raw, "reason": "empty value"})
+            return
+        accession_id, common = _accession(row)
+        zone = row.get(cols.get("zone", ""), None) if cols.get("zone") else None
+        season = row.get(cols.get("season", ""), None) if cols.get("season") else None
+        unit = row.get(cols.get("unit_of_measure", ""), None) if cols.get("unit_of_measure") else None
+        result = submit_phenotype_observation(
+            accession_id=accession_id,
+            common_name=common,
+            species=sp,
+            trait_category=category,
+            measurement_type=mtype,
+            measurement_value=mval,
+            measurement_unit=unit or None,
+            measurement_protocol=(row.get(cols.get("protocol", ""), None) if cols.get("protocol") else None) or f"fieldbook:{trait_raw}",
+            agroecological_zone=(zone or None),
+            season=(season or None),
+            submitted=_submitted(row),
+            write=write,
+        )
+        if not result.get("ok"):
+            skipped.append({"row": row_no, "trait": trait_raw, "reason": "; ".join(result.get("errors", ["validation failed"]))})
+            return
+        imported.append({
+            "row": row_no,
+            "accession_id": accession_id,
+            "species": sp,
+            "trait_category": category,
+            "content_hash": result.get("content_hash"),
+            "path": result.get("path"),
+        })
+
+    for i, row in enumerate(rows, start=1):
+        if long_format:
+            _emit(i, row, row.get(cols["trait"], ""), row.get(cols["value"], ""))
+        else:
+            for tc in trait_columns or []:
+                if tc in row:
+                    _emit(i, row, tc, row.get(tc, ""))
+
+    return {
+        "ok": True,
+        "source": source,
+        "layout": "long" if long_format else "wide",
+        "resolved_columns": cols,
+        "written": write,
+        "imported_count": len(imported),
+        "skipped_count": len(skipped),
+        "imported": imported,
+        "skipped": skipped or None,
+        "license_note": (
+            f"Imported observations are licensed {LEDGER_DATA_LICENSE} (open-data "
+            "copyleft), like all ledger data. See DATA_LICENSE.md."
+        ),
+        "next_step": (
+            "Review skipped rows (usually unmapped trait names — supply trait_map=). "
+            "With write=True the YAMLs are in the ledger; chain them with "
+            "append_observation_to_chain and open a PR to contribute."
+        ),
+    }
+
+
+@mcp.tool()
+def import_fieldbook_csv(
+    csv_content_or_path: str,
+    species: str | None = None,
+    trait_map: dict | None = None,
+    trait_columns: list[str] | None = None,
+    accession_prefix: str = "community:",
+    write: bool = False,
+) -> dict:
+    """Import a Field Book (PhenoApps) CSV export into the phenotype ledger.
+
+    Field Book is the most widely used open-source Android app for on-farm
+    phenotyping. This bridges its export straight into the community-science
+    ledger. Export from Field Book in **Database (long) format** — one row per
+    observation with trait and value columns — or pass `trait_columns` to import
+    a wide table where each named column is a trait.
+
+    Defaults to a DRY RUN (write=False): it validates and maps every row and
+    reports what would be imported and what was skipped (and why), writing
+    nothing. Set write=True to persist the mapped observations as ledger YAMLs.
+
+    Args:
+        csv_content_or_path: Raw CSV text, or a path to a .csv file.
+        species: Ensembl species string applied to all rows (e.g.
+            'oryza_sativa'). Optional if the CSV has a species/crop column.
+        trait_map: Optional {raw_trait_name: atlas_trait_category} overrides for
+            field trait names that don't auto-map (e.g.
+            {'SubTol': 'submergence_tolerance'}).
+        trait_columns: For a wide table, the list of column names to treat as
+            traits (each becomes one observation per row).
+        accession_prefix: Prefix for informal accessions lacking a formal ID
+            (default 'community:').
+        write: False (default) = dry run; True = write YAMLs to the ledger.
+
+    Returns a per-row import report: imported (with content hashes / paths) and
+    skipped (with reasons). See also import_bims_submission.
+    """
+    return _import_tabular(
+        csv_content_or_path, "fieldbook", species, trait_map, trait_columns,
+        accession_prefix, write,
+    )
+
+
+@mcp.tool()
+def import_bims_submission(
+    csv_content_or_path: str,
+    species: str | None = None,
+    trait_map: dict | None = None,
+    trait_columns: list[str] | None = None,
+    accession_prefix: str = "community:",
+    write: bool = False,
+) -> dict:
+    """Import a BIMS cultivar-submission CSV into the phenotype ledger.
+
+    BIMS (Breeding Information Management System) is the breeding-data path in
+    the Copyleft Cultivars ecosystem — see
+    CopyleftCultivars/bims-cultivar-submission. This maps a BIMS submission
+    table into the ledger's observation schema using the same BrAPI-aligned
+    column resolver as import_fieldbook_csv.
+
+    Column-name resolution is synonym-based and version-tolerant; if a real
+    BIMS template uses header names not yet recognised, pass an explicit
+    trait_map (and/or trait_columns for a wide layout) — or the resolver's
+    synonym table can be extended.
+
+    Defaults to a DRY RUN. Args mirror import_fieldbook_csv.
+    """
+    return _import_tabular(
+        csv_content_or_path, "bims", species, trait_map, trait_columns,
+        accession_prefix, write,
+    )
 
 
 # ===========================================================================

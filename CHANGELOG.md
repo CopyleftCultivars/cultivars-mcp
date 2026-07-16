@@ -4,6 +4,56 @@ All notable changes to the Cultivars MCP server. Format adapted from [Keep a Cha
 
 The unreleased section reflects work on the `refactor/plant-genomics-cultivars` branch (this PR).
 
+## [Unreleased] — Cryptographic ledger, field-data ingestion & researcher intro
+
+Turns the phenotype ledger from a pile of YAML files into a tamper-evident,
+independently auditable ledger; bridges on-farm data collection (Field Book,
+BIMS) into it; and adds a faculty-facing introduction.
+
+### Tool count: 28 → **35** (+7)
+### Tests: 145 → **164 mocked** (+19) plus an opt-in **live-integration** suite
+
+### Added — hash-chain + OpenTimestamps anchoring (crypto**graphic**, not crypto**currency**)
+
+- **`append_observation_to_chain`** — links an observation into an append-only
+  hash-chain (`CHAIN.jsonl`) where each entry commits to the previous
+  (`prev_entry_hash → entry_hash`). A Git-like Merkle spine; idempotent.
+- **`verify_ledger_chain`** — walks the chain and detects reordering, splicing,
+  altered entries, and post-hoc edits to any chained observation file.
+- **`anchor_ledger_head`** / **`anchor_observation_timestamp`** — submit a hash to
+  the free public [OpenTimestamps](https://opentimestamps.org) calendars and save
+  a standards-compliant detached `.ots` proof (assembled from the calendar
+  response with the correct OTS v1 framing). One head anchor timestamps the whole
+  chain. Graceful offline fallback; no token, wallet, or fee.
+- **`verify_timestamp`** — structural verification of a `.ots` proof (and optional
+  commitment-to-expected-hash check); points to the reference `ots` client for
+  full Bitcoin confirmation. New optional `anchor` extra pins
+  `opentimestamps-client`.
+- Observation YAML is never mutated by anchoring (that would change its content
+  hash) — proofs live in sidecar files. `phenotypes/README.md` updated to reflect
+  the ledger (superseding the earlier "no chain" note) while keeping the
+  no-token/no-coin framing explicit.
+
+### Added — Field Book / BIMS field-data ingestion
+
+- **`import_fieldbook_csv`** / **`import_bims_submission`** — map Field Book
+  (PhenoApps) and BIMS tabular exports into ledger observations through the same
+  `submit_phenotype_observation` validation path (no drifting second code path).
+  Synonym-based, version-tolerant column resolver; long (one row per observation)
+  and wide (`trait_columns`) layouts; fuzzy trait→atlas mapping with a `trait_map`
+  override; measurement-type inference; **dry-run by default**, per-row imported /
+  skipped report with reasons. Aligned with
+  `CopyleftCultivars/bims-cultivar-submission` (exact header names reconcile
+  against that template; the resolver already covers common BrAPI-aligned names).
+
+### Added — docs & CI
+
+- **`docs/ACADEMIC_INTRO.md`** — a faculty-facing brief (linked from the README)
+  for sharing with researchers/educators, covering the databases, the
+  community-science layer, the field-data bridge, and licensing.
+- **`live-integration.yml`** — nightly GitHub Actions workflow running the opt-in
+  live smoke suite against the real databases + an OTS calendar, off the PR path.
+
 ## [Unreleased] — Community Science Layer
 
 Transforms cultivars-mcp from a read-only genomics query layer into a

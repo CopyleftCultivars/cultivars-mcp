@@ -14,6 +14,12 @@ dependencies = [
 dev = [
     "pytest>=8.0",
 ]
+# Reference OpenTimestamps client — only needed to `ots upgrade` / `ots verify`
+# a proof against the Bitcoin blockchain. Creating and structurally verifying
+# proofs works with the core httpx dependency alone.
+anchor = [
+    "opentimestamps-client>=0.7",
+]
 
 [build-system]
 requires = ["hatchling"]
