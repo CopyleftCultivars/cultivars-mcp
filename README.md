@@ -8,6 +8,7 @@ Part of the [Copyleft Cultivars](https://github.com/CopyleftCultivars) ecosystem
 |---|---|
 | 👥 **Audience guide** (Patreon members, non-technical) | [docs/PATREON_INTRO.md](docs/PATREON_INTRO.md) |
 | 🎓 **Researcher / educator intro** (faculty-facing brief) | [docs/ACADEMIC_INTRO.md](docs/ACADEMIC_INTRO.md) |
+| 🌾 **Field-data guide** (Field Book / BIMS → ledger, + templates) | [docs/FIELD_DATA_GUIDE.md](docs/FIELD_DATA_GUIDE.md) |
 | 📖 **User guide** (full reference + recipes) | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) |
 | 🔧 **Contributing** (add traits, regenerate audits) | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | 📜 **License** (Apache 2.0) | [LICENSE](LICENSE) |

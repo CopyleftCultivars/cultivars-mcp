@@ -2224,3 +2224,54 @@ def test_bims_long_form(ledger):
 def test_match_trait_category_strips_hash_prefix():
     assert server._match_trait_category("#drought tolerance") == "drought_tolerance"
     assert server._match_trait_category("#Plant Height") == "plant_height_dwarfing"
+
+
+# ---------------------------------------------------------------------------
+# Shipped templates — compatibility guarantee
+#
+# These load the ACTUAL files under templates/ and assert they still import,
+# so a refactor of the resolver or trait atlas can't silently break the
+# artifacts we hand to growers.
+# ---------------------------------------------------------------------------
+
+_TEMPLATES = pathlib.Path(__file__).resolve().parent.parent / "templates"
+
+
+def test_shipped_fieldbook_export_imports(ledger):
+    csv_path = _TEMPLATES / "fieldbook" / "example_fieldbook_export_long.csv"
+    out = server.import_fieldbook_csv(str(csv_path), species="oryza_sativa", write=True)
+    assert out["ok"] is True and out["layout"] == "long"
+    assert out["imported_count"] == 7 and out["skipped_count"] == 0
+
+
+def test_shipped_bims_wide_template_imports(ledger):
+    csv_path = _TEMPLATES / "bims" / "phenotype_bims_wide_template.csv"
+    out = server.import_bims_submission(str(csv_path), species="oryza_sativa")
+    assert out["ok"] is True and out["layout"] == "wide"
+    # Non-empty cells import; blank cells in the sparse matrix are skipped.
+    assert out["imported_count"] == 7
+    assert all(s["reason"] == "empty value" for s in (out["skipped"] or []))
+
+
+def test_shipped_bims_long_template_imports(ledger):
+    csv_path = _TEMPLATES / "bims" / "phenotype_long_form_bims_template.csv"
+    out = server.import_bims_submission(str(csv_path), species="oryza_sativa")
+    assert out["ok"] is True and out["layout"] == "long"
+    assert out["imported_count"] == 6 and out["skipped_count"] == 0
+
+
+def test_shipped_trait_file_names_all_map():
+    import csv as _csv
+    trt = _TEMPLATES / "fieldbook" / "cultivars_traits.trt"
+    with trt.open() as fh:
+        rows = list(_csv.DictReader(fh))
+    assert len(rows) == 16
+    for row in rows:
+        assert server._match_trait_category(row["trait"]) is not None, (
+            f"trait template name {row['trait']!r} no longer maps to an atlas category"
+        )
+        # Field Book format must be one of the 12 supported formats.
+        assert row["format"] in {
+            "numeric", "percent", "categorical", "date", "text", "boolean",
+            "counter", "photo", "disease rating", "location", "multicat", "audio",
+        }

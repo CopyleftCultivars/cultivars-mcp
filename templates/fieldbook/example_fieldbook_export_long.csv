@@ -1,0 +1,8 @@
+unique_id,trait,value,timestamp,person,location
+IRGC121316_R1P1,submergence tolerance,true,2026-06-14 09:12:00,A. Grower,south_asia_tropical_humid
+IRGC121316_R1P1,plant height,138,2026-06-14 09:12:30,A. Grower,south_asia_tropical_humid
+IRGC121316_R1P2,submergence tolerance,true,2026-06-14 09:15:00,A. Grower,south_asia_tropical_humid
+FR13A_R2P1,submergence tolerance,true,2026-06-14 09:20:00,A. Grower,south_asia_tropical_humid
+FR13A_R2P1,plant height,121,2026-06-14 09:20:30,A. Grower,south_asia_tropical_humid
+community_rice_R3P1,submergence tolerance,false,2026-06-14 09:25:00,A. Grower,south_asia_tropical_humid
+community_rice_R3P1,drought tolerance,moderate,2026-06-14 09:25:40,A. Grower,south_asia_tropical_humid

@@ -76,7 +76,8 @@ bridge in the ecosystem:
    map those tabular exports directly into the phenotype ledger's schema —
    validating, mapping trait names to the atlas, and (optionally) writing
    observation records. A dry-run reports exactly what would import and what was
-   skipped and why.
+   skipped and why. Ready-to-use Field Book and BIMS templates and a full
+   walkthrough are in the [field-data guide](FIELD_DATA_GUIDE.md).
 3. **Make it tamper-evident and citable.** Each observation is content-hashed and
    can be Ed25519-signed for pseudonymous scientific attribution. Observations
    link into an append-only **hash-chain**, and the chain head can be anchored to

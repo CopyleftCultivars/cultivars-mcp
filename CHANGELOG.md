@@ -11,7 +11,7 @@ independently auditable ledger; bridges on-farm data collection (Field Book,
 BIMS) into it; and adds a faculty-facing introduction.
 
 ### Tool count: 28 → **35** (+7)
-### Tests: 145 → **168 mocked** (+23) plus an opt-in **live-integration** suite
+### Tests: 145 → **172 mocked** (+27) plus an opt-in **live-integration** suite
 
 ### Added — hash-chain + OpenTimestamps anchoring (crypto**graphic**, not crypto**currency**)
 
@@ -58,6 +58,15 @@ BIMS) into it; and adds a faculty-facing introduction.
   community-science layer, the field-data bridge, and licensing.
 - **`live-integration.yml`** — nightly GitHub Actions workflow running the opt-in
   live smoke suite against the real databases + an OTS calendar, off the PR path.
+- **`docs/FIELD_DATA_GUIDE.md`** — end-to-end grower guide: install Field Book,
+  load the templates, collect, export, import to the ledger, chain + anchor + PR;
+  the BIMS path; a trait reference table; an **infrastructure** section; and
+  troubleshooting.
+- **`templates/`** — ready-to-use starter files, each verified by a CI test that
+  imports it: a Field Book field layout (`cultivars_field_template.csv`), a
+  Field Book trait file of 16 atlas-mapped traits (`cultivars_traits.trt`), an
+  example Field Book long-format export, and both BIMS phenotype templates
+  (wide `#`-prefixed and long form). Trait names map 1:1 to the atlas.
 
 ## [Unreleased] — Community Science Layer
 

@@ -1,0 +1,7 @@
+unique_id,row,column,accession,species,common_name
+IRGC121316_R1P1,1,1,IRGC_121316,oryza_sativa,Gobol Sail
+IRGC121316_R1P2,1,2,IRGC_121316,oryza_sativa,Gobol Sail
+FR13A_R2P1,2,1,IRGC_5678,oryza_sativa,FR13A
+FR13A_R2P2,2,2,IRGC_5678,oryza_sativa,FR13A
+community_rice_R3P1,3,1,community:grandmas_rice,oryza_sativa,Grandma's Rice
+community_rice_R3P2,3,2,community:grandmas_rice,oryza_sativa,Grandma's Rice
