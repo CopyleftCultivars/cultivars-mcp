@@ -1,0 +1,17 @@
+trait,format,defaultValue,minimum,maximum,details,categories,isVisible,realPosition
+drought tolerance,categorical,,,,Whole-plant water-deficit response scored visually,susceptible/moderate/tolerant,true,1
+salt tolerance,categorical,,,,Whole-plant response under saline soil or water,susceptible/moderate/tolerant,true,2
+cold tolerance,categorical,,,,Freezing or chilling injury response,susceptible/moderate/tolerant,true,3
+heat tolerance,categorical,,,,Response under heat-stress conditions,susceptible/moderate/tolerant,true,4
+submergence tolerance,boolean,,,,Survived a defined flooding period (true = survived),,true,5
+plant height,numeric,,0,500,Plant height in centimeters,,true,6
+tiller branching,counter,,,,Count of tillers or primary branches,,true,7
+flowering photoperiod,numeric,,0,400,Days to 50 percent flowering,,true,8
+grain quality,categorical,,,,Overall grain or seed quality score,poor/fair/good/excellent,true,9
+mycorrhizal symbiosis,boolean,,,,Root colonization observed (true = colonized),,true,10
+nitrogen use efficiency,categorical,,,,Vigor or greenness under low-nitrogen conditions,low/moderate/high,true,11
+root architecture,categorical,,,,Root system depth and branching class,shallow/intermediate/deep,true,12
+aluminum tolerance,categorical,,,,Root growth response on acid or high-aluminum soil,susceptible/moderate/tolerant,true,13
+hemp compliance,percent,,0,100,Total THC as percent dry weight (compliance testing),,true,14
+cannabinoid biosynthesis,percent,,0,100,Target cannabinoid as percent dry weight,,true,15
+cannabis terpene profile,categorical,,,,Dominant terpene class,myrcene/limonene/caryophyllene/terpinolene/pinene/linalool,true,16

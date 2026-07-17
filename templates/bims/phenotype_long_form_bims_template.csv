@@ -1,0 +1,7 @@
+accession,unique_id,primary_order,secondary_order,trait,value,timestamp
+IRGC_121316,IRGC121316_R1P1,1,1,submergence tolerance,true,2026-06-14
+IRGC_121316,IRGC121316_R1P1,1,1,plant height,138,2026-06-14
+IRGC_121316,IRGC121316_R1P2,1,2,submergence tolerance,true,2026-06-14
+IRGC_5678,FR13A_R2P1,2,1,submergence tolerance,true,2026-06-14
+IRGC_5678,FR13A_R2P1,2,1,plant height,121,2026-06-14
+community:grandmas_rice,community_rice_R3P1,3,1,drought tolerance,moderate,2026-06-14

@@ -31,4 +31,8 @@ uv.lock
 # of contributed observation YAMLs accumulate locally and are submitted via PR
 # rather than committed wholesale. Snapshots are ephemeral offline-bridge blobs.
 phenotypes/**/*.yaml
+# Hash-chain spine + OpenTimestamps proofs are also runtime output: a grower
+# runs a private local ledger and contributes deliberately via PR.
+phenotypes/CHAIN.jsonl
+phenotypes/**/*.ots
 snapshots/

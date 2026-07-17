@@ -1887,3 +1887,391 @@ def test_pin_to_ipfs_success_writes_cid(ledger, monkeypatch):
 def test_pin_to_ipfs_missing_file():
     out = server.pin_observation_to_ipfs("/nonexistent/path.yaml")
     assert out["ok"] is False
+
+
+# ---------------------------------------------------------------------------
+# Hash-chained ledger — append_observation_to_chain / verify_ledger_chain
+# ---------------------------------------------------------------------------
+
+
+def _write_obs(ledger_dir, name="o1.yaml", accession="IRGC_1"):
+    """Write a valid observation via the real submit path; return its path."""
+    out = server.submit_phenotype_observation(
+        accession_id=accession,
+        common_name="Test Rice",
+        species="oryza_sativa",
+        trait_category="submergence_tolerance",
+        measurement_type="binary",
+        measurement_value=True,
+    )
+    return pathlib.Path(out["path"]), out["content_hash"]
+
+
+def test_chain_append_links_entries(ledger):
+    p1, h1 = _write_obs(ledger, accession="IRGC_1")
+    p2, h2 = _write_obs(ledger, accession="IRGC_2")
+    c1 = server.append_observation_to_chain(str(p1), recorded_at="2026-07-16T00:00:00+00:00")
+    c2 = server.append_observation_to_chain(str(p2), recorded_at="2026-07-16T00:00:01+00:00")
+    assert c1["seq"] == 0 and c2["seq"] == 1
+    assert c1["prev_entry_hash"] == server.GENESIS_PREV_HASH
+    assert c2["prev_entry_hash"] == c1["entry_hash"]
+    assert c1["content_hash"] == h1 and c2["content_hash"] == h2
+
+
+def test_chain_append_is_idempotent(ledger):
+    p1, _ = _write_obs(ledger)
+    first = server.append_observation_to_chain(str(p1))
+    again = server.append_observation_to_chain(str(p1))
+    assert first["already_chained"] is False
+    assert again["already_chained"] is True
+    assert again["seq"] == first["seq"]
+
+
+def test_chain_missing_file():
+    out = server.append_observation_to_chain("/nonexistent/o.yaml")
+    assert out["ok"] is False
+
+
+def test_verify_empty_chain(ledger):
+    out = server.verify_ledger_chain()
+    assert out["ok"] is True and out["valid"] is True and out["chain_length"] == 0
+
+
+def test_verify_intact_chain(ledger):
+    p1, _ = _write_obs(ledger, accession="IRGC_1")
+    p2, _ = _write_obs(ledger, accession="IRGC_2")
+    server.append_observation_to_chain(str(p1), recorded_at="2026-07-16T00:00:00+00:00")
+    server.append_observation_to_chain(str(p2), recorded_at="2026-07-16T00:00:01+00:00")
+    out = server.verify_ledger_chain()
+    assert out["valid"] is True and out["chain_length"] == 2
+    assert out["first_break"] is None and out["file_mismatches"] is None
+
+
+def test_verify_detects_edited_observation(ledger):
+    p1, _ = _write_obs(ledger)
+    server.append_observation_to_chain(str(p1))
+    # Tamper with the observation file after chaining.
+    p1.write_text(p1.read_text().replace("Test Rice", "TAMPERED"))
+    out = server.verify_ledger_chain(check_files=True)
+    assert out["valid"] is False
+    assert any("content_hash changed" in m["reason"] for m in out["file_mismatches"])
+
+
+def test_verify_detects_reordered_chain(ledger):
+    p1, _ = _write_obs(ledger, accession="IRGC_1")
+    p2, _ = _write_obs(ledger, accession="IRGC_2")
+    server.append_observation_to_chain(str(p1), recorded_at="2026-07-16T00:00:00+00:00")
+    server.append_observation_to_chain(str(p2), recorded_at="2026-07-16T00:00:01+00:00")
+    chain_file = pathlib.Path(server._chain_file())
+    lines = chain_file.read_text().splitlines()
+    chain_file.write_text("\n".join([lines[1], lines[0]]) + "\n")
+    out = server.verify_ledger_chain(check_files=False)
+    assert out["valid"] is False and out["first_break"] is not None
+
+
+def test_verify_detects_altered_entry(ledger):
+    p1, _ = _write_obs(ledger)
+    server.append_observation_to_chain(str(p1))
+    chain_file = pathlib.Path(server._chain_file())
+    doc = json.loads(chain_file.read_text().splitlines()[0])
+    doc["accession_id"] = "FORGED"  # entry_hash no longer matches
+    chain_file.write_text(json.dumps(doc) + "\n")
+    out = server.verify_ledger_chain(check_files=False)
+    assert out["valid"] is False
+    assert "entry_hash" in out["first_break"]["reason"]
+
+
+# ---------------------------------------------------------------------------
+# OpenTimestamps anchoring
+# ---------------------------------------------------------------------------
+
+
+def _ots_factory(handler):
+    def factory(base_url):
+        return httpx.Client(base_url=base_url, transport=httpx.MockTransport(handler), timeout=5)
+    return factory
+
+
+def test_ots_proof_roundtrip():
+    digest = bytes(range(32))
+    proof = server._build_ots_proof(digest, b"\xff\xfe calendar-timestamp")
+    parsed = server._parse_ots_proof(proof)
+    assert parsed["digest_hex"] == digest.hex()
+    assert parsed["file_hash_op"] == "sha256"
+    assert parsed["version"] == 1
+
+
+def test_parse_ots_rejects_bad_magic():
+    with pytest.raises(ValueError):
+        server._parse_ots_proof(b"not-an-ots-file")
+
+
+def test_anchor_observation_writes_sidecar(ledger, monkeypatch):
+    p1, chash = _write_obs(ledger)
+
+    def handler(req):
+        assert req.url.path == "/digest"
+        assert len(req.content) == 32
+        return httpx.Response(200, content=b"\x00\x01serialized-timestamp")
+    monkeypatch.setattr(server, "_ots_calendar_client", _ots_factory(handler))
+    out = server.anchor_observation_timestamp(str(p1))
+    assert out["ok"] is True and out["pending"] is True
+    ots_path = pathlib.Path(out["ots_path"])
+    assert ots_path.exists() and ots_path.name.endswith(".yaml.ots")
+    # The proof must commit to the observation content hash.
+    vt = server.verify_timestamp(str(ots_path), expected_hash=chash)
+    assert vt["well_formed"] is True and vt["matches_expected_hash"] is True
+
+
+def test_anchor_observation_offline_fallback(ledger, monkeypatch):
+    p1, _ = _write_obs(ledger)
+
+    def handler(req):
+        raise httpx.ConnectError("no calendar")
+    monkeypatch.setattr(server, "_ots_calendar_client", _ots_factory(handler))
+    out = server.anchor_observation_timestamp(str(p1))
+    assert out["ok"] is False and out["fallback"] is True
+    assert not pathlib.Path(str(p1) + ".ots").exists()
+
+
+def test_anchor_ledger_head(ledger, monkeypatch):
+    p1, _ = _write_obs(ledger)
+    server.append_observation_to_chain(str(p1), recorded_at="2026-07-16T00:00:00+00:00")
+
+    def handler(req):
+        return httpx.Response(200, content=b"\x00\x01ts")
+    monkeypatch.setattr(server, "_ots_calendar_client", _ots_factory(handler))
+    out = server.anchor_ledger_head()
+    assert out["ok"] is True and out["head_seq"] == 0
+    assert pathlib.Path(out["ots_path"]).exists()
+
+
+def test_anchor_ledger_head_empty_chain(ledger):
+    out = server.anchor_ledger_head()
+    assert out["ok"] is False
+
+
+def test_verify_timestamp_hash_mismatch(ledger, monkeypatch):
+    p1, _ = _write_obs(ledger)
+
+    def handler(req):
+        return httpx.Response(200, content=b"\x00\x01ts")
+    monkeypatch.setattr(server, "_ots_calendar_client", _ots_factory(handler))
+    out = server.anchor_observation_timestamp(str(p1))
+    vt = server.verify_timestamp(out["ots_path"], expected_hash="sha256:" + "a" * 64)
+    assert vt["ok"] is False and vt["matches_expected_hash"] is False
+
+
+def test_verify_timestamp_missing_file():
+    out = server.verify_timestamp("/nonexistent/x.ots")
+    assert out["ok"] is False
+
+
+# ---------------------------------------------------------------------------
+# Field-data importer — import_fieldbook_csv / import_bims_submission
+# ---------------------------------------------------------------------------
+
+_LONG_CSV = (
+    "unique_id,germplasm,trait,value,timestamp,location\n"
+    "plot1,IRGC_12345,submergence_tolerance,true,2026-05-28 10:00:00,south_asia\n"
+    "plot2,IRGC_67890,submergence tolerance,false,2026-05-28 10:05:00,south_asia\n"
+    "plot3,community_rice,plant_height,142.5,2026-05-28,south_asia\n"
+    "plot4,IRGC_99,MysteryTrait,42,2026-05-28,south_asia\n"
+)
+
+
+def test_import_fieldbook_long_dry_run(ledger):
+    out = server.import_fieldbook_csv(_LONG_CSV, species="oryza_sativa", write=False)
+    assert out["ok"] is True and out["layout"] == "long" and out["written"] is False
+    assert out["imported_count"] == 3
+    assert out["skipped_count"] == 1
+    assert any("did not map" in s["reason"] for s in out["skipped"])
+
+
+def test_import_fieldbook_trait_map_and_write(ledger):
+    out = server.import_fieldbook_csv(
+        _LONG_CSV, species="oryza_sativa",
+        trait_map={"MysteryTrait": "plant_height"}, write=True,
+    )
+    assert out["imported_count"] == 4 and out["written"] is True
+    for entry in out["imported"]:
+        assert entry["content_hash"].startswith("sha256:")
+        assert pathlib.Path(entry["path"]).exists()
+
+
+def test_import_measurement_inference(ledger):
+    out = server.import_fieldbook_csv(_LONG_CSV, species="oryza_sativa", write=True)
+    # binary from "true"/"false", continuous from 142.5
+    q = server.query_community_phenotypes("submergence_tolerance", species="oryza_sativa")
+    assert q["observation_count"] == 2
+    # "plant_height" fuzzy-resolves to the atlas key "plant_height_dwarfing".
+    qh = server.query_community_phenotypes("plant_height_dwarfing", species="oryza_sativa")
+    assert qh["observation_count"] == 1
+    assert qh["measurement_distribution"]["continuous"]["mean"] == 142.5
+
+
+def test_import_wide_requires_trait_columns(ledger):
+    wide = "germplasm,drought_tolerance,plant_height\nHopi,tolerant,180\n"
+    # Without trait_columns the wide layout can't be detected.
+    bad = server.import_fieldbook_csv(wide, species="zea_mays")
+    assert bad["ok"] is False and "long-format" in bad["error"]
+    # With trait_columns it imports one observation per named column.
+    good = server.import_fieldbook_csv(
+        wide, species="zea_mays", trait_columns=["drought_tolerance", "plant_height"], write=False,
+    )
+    assert good["ok"] is True and good["layout"] == "wide" and good["imported_count"] == 2
+
+
+def test_import_species_from_column(ledger):
+    csv_text = (
+        "germplasm,species,trait,value\n"
+        "X1,oryza_sativa,drought_tolerance,tolerant\n"
+    )
+    out = server.import_fieldbook_csv(csv_text, write=False)
+    assert out["imported_count"] == 1
+    assert out["imported"][0]["species"] == "oryza_sativa"
+
+
+def test_import_no_species_skips(ledger):
+    csv_text = "germplasm,trait,value\nX1,drought_tolerance,tolerant\n"
+    out = server.import_fieldbook_csv(csv_text, write=False)
+    assert out["imported_count"] == 0 and out["skipped_count"] == 1
+    assert "no species" in out["skipped"][0]["reason"]
+
+
+def test_import_bims_alias(ledger):
+    out = server.import_bims_submission(_LONG_CSV, species="oryza_sativa", write=False)
+    assert out["ok"] is True and out["source"] == "bims"
+
+
+def test_import_from_path(ledger, tmp_path):
+    csv_file = tmp_path / "fieldbook_export.csv"
+    csv_file.write_text(_LONG_CSV)
+    out = server.import_fieldbook_csv(str(csv_file), species="oryza_sativa", write=False)
+    assert out["ok"] is True and out["imported_count"] == 3
+
+
+# ---------------------------------------------------------------------------
+# MCP protocol surface — the server registers and exposes tools correctly
+# ---------------------------------------------------------------------------
+
+
+def test_all_tools_registered():
+    import asyncio
+    tools = asyncio.run(server.mcp.list_tools())
+    names = {t.name for t in tools}
+    # Spot-check the new community-science + ingestion tools are exposed.
+    for expected in {
+        "append_observation_to_chain", "verify_ledger_chain", "anchor_ledger_head",
+        "anchor_observation_timestamp", "verify_timestamp",
+        "import_fieldbook_csv", "import_bims_submission",
+    }:
+        assert expected in names, f"{expected} not registered as an MCP tool"
+    assert len(tools) >= 35
+
+
+def test_new_tools_have_descriptions():
+    import asyncio
+    tools = asyncio.run(server.mcp.list_tools())
+    for t in tools:
+        if t.name in {"append_observation_to_chain", "import_fieldbook_csv", "anchor_ledger_head"}:
+            assert t.description and len(t.description) > 40
+
+
+# ---------------------------------------------------------------------------
+# BIMS template formats (verified against breedwithbims.org / cottongen.org)
+# ---------------------------------------------------------------------------
+
+# phenotype_bims (wide form): #-prefixed trait headings, one row per accession.
+_BIMS_WIDE_CSV = (
+    "accession,unique_id,primary_order,secondary_order,#drought tolerance,#Plant Height\n"
+    "Hopi_Blue,HB_001,1,1,tolerant,180\n"
+    "Oaxacan_Green,OG_002,1,2,susceptible,165\n"
+)
+
+# phenotype_long_form_bims: trait + value columns, one row per accession x trait.
+_BIMS_LONG_CSV = (
+    "accession,unique_id,trait,value,timestamp\n"
+    "Hopi_Blue,HB_001,drought_tolerance,tolerant,2026-05-28\n"
+    "Hopi_Blue,HB_001,plant_height,180,2026-05-28\n"
+)
+
+
+def test_bims_wide_form_hash_prefixed_traits_autodetected(ledger):
+    out = server.import_bims_submission(_BIMS_WIDE_CSV, species="zea_mays", write=False)
+    assert out["ok"] is True and out["layout"] == "wide"
+    # 2 accessions x 2 #-prefixed traits.
+    assert out["imported_count"] == 4
+    cats = {e["trait_category"] for e in out["imported"]}
+    assert "drought_tolerance" in cats and "plant_height_dwarfing" in cats
+    accs = {e["accession_id"] for e in out["imported"]}
+    assert accs == {"Hopi_Blue", "Oaxacan_Green"}
+
+
+def test_bims_wide_form_only_for_bims_source(ledger):
+    # The Field Book importer must NOT silently treat #-columns as traits;
+    # it requires an explicit trait_columns for a wide table.
+    out = server.import_fieldbook_csv(_BIMS_WIDE_CSV, species="zea_mays")
+    assert out["ok"] is False and "long-format" in out["error"]
+
+
+def test_bims_long_form(ledger):
+    out = server.import_bims_submission(_BIMS_LONG_CSV, species="zea_mays", write=False)
+    assert out["ok"] is True and out["layout"] == "long"
+    assert out["imported_count"] == 2
+
+
+def test_match_trait_category_strips_hash_prefix():
+    assert server._match_trait_category("#drought tolerance") == "drought_tolerance"
+    assert server._match_trait_category("#Plant Height") == "plant_height_dwarfing"
+
+
+# ---------------------------------------------------------------------------
+# Shipped templates — compatibility guarantee
+#
+# These load the ACTUAL files under templates/ and assert they still import,
+# so a refactor of the resolver or trait atlas can't silently break the
+# artifacts we hand to growers.
+# ---------------------------------------------------------------------------
+
+_TEMPLATES = pathlib.Path(__file__).resolve().parent.parent / "templates"
+
+
+def test_shipped_fieldbook_export_imports(ledger):
+    csv_path = _TEMPLATES / "fieldbook" / "example_fieldbook_export_long.csv"
+    out = server.import_fieldbook_csv(str(csv_path), species="oryza_sativa", write=True)
+    assert out["ok"] is True and out["layout"] == "long"
+    assert out["imported_count"] == 7 and out["skipped_count"] == 0
+
+
+def test_shipped_bims_wide_template_imports(ledger):
+    csv_path = _TEMPLATES / "bims" / "phenotype_bims_wide_template.csv"
+    out = server.import_bims_submission(str(csv_path), species="oryza_sativa")
+    assert out["ok"] is True and out["layout"] == "wide"
+    # Non-empty cells import; blank cells in the sparse matrix are skipped.
+    assert out["imported_count"] == 7
+    assert all(s["reason"] == "empty value" for s in (out["skipped"] or []))
+
+
+def test_shipped_bims_long_template_imports(ledger):
+    csv_path = _TEMPLATES / "bims" / "phenotype_long_form_bims_template.csv"
+    out = server.import_bims_submission(str(csv_path), species="oryza_sativa")
+    assert out["ok"] is True and out["layout"] == "long"
+    assert out["imported_count"] == 6 and out["skipped_count"] == 0
+
+
+def test_shipped_trait_file_names_all_map():
+    import csv as _csv
+    trt = _TEMPLATES / "fieldbook" / "cultivars_traits.trt"
+    with trt.open() as fh:
+        rows = list(_csv.DictReader(fh))
+    assert len(rows) == 16
+    for row in rows:
+        assert server._match_trait_category(row["trait"]) is not None, (
+            f"trait template name {row['trait']!r} no longer maps to an atlas category"
+        )
+        # Field Book format must be one of the 12 supported formats.
+        assert row["format"] in {
+            "numeric", "percent", "categorical", "date", "text", "boolean",
+            "counter", "photo", "disease rating", "location", "multicat", "audio",
+        }

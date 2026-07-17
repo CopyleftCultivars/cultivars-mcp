@@ -1,0 +1,5 @@
+accession,unique_id,primary_order,secondary_order,#submergence tolerance,#plant height,#drought tolerance
+IRGC_121316,IRGC121316_R1P1,1,1,true,138,
+IRGC_121316,IRGC121316_R1P2,1,2,true,,
+IRGC_5678,FR13A_R2P1,2,1,true,121,
+community:grandmas_rice,community_rice_R3P1,3,1,false,,moderate

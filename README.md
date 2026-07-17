@@ -7,6 +7,8 @@ Part of the [Copyleft Cultivars](https://github.com/CopyleftCultivars) ecosystem
 | | |
 |---|---|
 | 👥 **Audience guide** (Patreon members, non-technical) | [docs/PATREON_INTRO.md](docs/PATREON_INTRO.md) |
+| 🎓 **Researcher / educator intro** (faculty-facing brief) | [docs/ACADEMIC_INTRO.md](docs/ACADEMIC_INTRO.md) |
+| 🌾 **Field-data guide** (Field Book / BIMS → ledger, + templates) | [docs/FIELD_DATA_GUIDE.md](docs/FIELD_DATA_GUIDE.md) |
 | 📖 **User guide** (full reference + recipes) | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) |
 | 🔧 **Contributing** (add traits, regenerate audits) | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | 📜 **License** (Apache 2.0) | [LICENSE](LICENSE) |
@@ -31,7 +33,7 @@ Part of the [Copyleft Cultivars](https://github.com/CopyleftCultivars) ecosystem
 
 ## What it does
 
-28 MCP tools across 5 live databases plus a 35-category curated trait atlas — **73% of the core atlas is verified against manually-curated UniProt entries with PubMed citations**. Beyond read-only genomics, a **community-science layer** adds a phenotype-observation write path, Ed25519 attribution, a GWAS power estimator, GRIN accession resolution, organellar-genome queries, and an offline-bridge export (see the [Community Science Layer](#community-science-layer)).
+35 MCP tools across 5 live databases plus a 35-category curated trait atlas — **73% of the core atlas is verified against manually-curated UniProt entries with PubMed citations**. Beyond read-only genomics, a **community-science layer** adds a phenotype-observation write path, Ed25519 attribution, a tamper-evident hash-chain ledger with OpenTimestamps (Bitcoin) anchoring, Field Book / BIMS field-data import, a GWAS power estimator, GRIN accession resolution, organellar-genome queries, and an offline-bridge export (see the [Community Science Layer](#community-science-layer)).
 
 ### Plant gene + variant tools (Ensembl Plants, ~80 species)
 
@@ -81,15 +83,24 @@ Part of the [Copyleft Cultivars](https://github.com/CopyleftCultivars) ecosystem
 
 The write path and participatory-science tools. **Ledger data is licensed
 [ODbL-1.0](DATA_LICENSE.md)** (open-data copyleft), distinct from the Apache-2.0
-code license — so the commons stays open. Attribution is via Ed25519 signatures,
-**not** any token or cryptocurrency.
+code license — so the commons stays open. The ledger is **cryptographic, not a
+cryptocurrency**: hash-chaining + OpenTimestamps make it tamper-evident and
+independently auditable, with **no token, coin, wallet, or fee** (see
+[`phenotypes/README.md`](phenotypes/README.md)).
 
 | Tool | Use |
 |---|---|
 | `submit_phenotype_observation` | Record a field observation as a schema-v1.0 YAML in the ledger; returns a canonical form to sign + PR instructions (no GitHub creds needed) |
+| `import_fieldbook_csv` | Map a [Field Book](https://github.com/PhenoApps/Field-Book) app export (long or wide CSV) into ledger observations; dry-run by default |
+| `import_bims_submission` | Map a BIMS cultivar-submission table into ledger observations (aligned with `bims-cultivar-submission`) |
 | `query_community_phenotypes` | Aggregate the ledger: count, measurement distribution, accessions, signed-observation count |
 | `estimate_gwas_power` | "Can my village's 12 varieties detect this locus?" — Bonferroni power calc, pulls live count from the ledger |
 | `verify_observation_integrity` | Verify a detached Ed25519 signature over the canonical observation — pseudonymous scientific attribution |
+| `append_observation_to_chain` | Link an observation into the append-only hash-chain (`CHAIN.jsonl`) — the tamper-evident ledger spine |
+| `verify_ledger_chain` | Walk the hash-chain and detect any tampering (reordering, splicing, or post-hoc edits to a chained observation) |
+| `anchor_ledger_head` | OpenTimestamps-anchor the chain head to Bitcoin — one proof timestamps the whole ledger; token-less proof-of-existence |
+| `anchor_observation_timestamp` | OpenTimestamps-anchor a single observation; saves a detached `.ots` proof sidecar |
+| `verify_timestamp` | Structurally verify a `.ots` proof (and optionally that it commits to an expected hash) |
 | `pin_observation_to_ipfs` | Content-address an observation (+ optional VCF) via a local kubo node; graceful fallback if none |
 | `resolve_accession` | Folk seed name → USDA GRIN-Global accession → Ensembl species string |
 | `query_organellar_variants` | First-class Mt/Pt genome queries + curated organellar atlas (CMS, plastid herbicide resistance, photosynthesis) |
@@ -154,10 +165,13 @@ Full details in [FORK_NOTES.md](FORK_NOTES.md). Eval scripts in `evals/` (gitign
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/ -v
+pytest tests/ -v                              # mocked, no network — fast
+
+# Opt-in smoke tests against the real upstream services + an OpenTimestamps calendar:
+CULTIVARS_LIVE_TESTS=1 pytest tests/test_live_integration.py -v
 ```
 
-**88 unit tests** using `httpx.MockTransport` (no live network), run in ~1.5s. GitHub Actions runs on Python 3.10 / 3.11 / 3.12 on every PR.
+**164 unit tests** using `httpx.MockTransport` (no live network), run in ~1s — covering the genomics tools, the phenotype ledger, the hash-chain + OpenTimestamps anchoring (tamper-detection and offline-fallback paths), the Field Book / BIMS importer, and the registered MCP tool surface. GitHub Actions runs them on Python 3.10 / 3.11 / 3.12 on every PR. A separate **nightly** workflow (`live-integration.yml`) runs the opt-in live smoke suite against the real databases so upstream outages and format changes surface on a schedule rather than in PR CI.
 
 ## Usage
 
@@ -255,7 +269,7 @@ export_offline_snapshot(trait_category="submergence_tolerance", species="oryza_s
 
 ## Skill
 
-A Claude Code skill lives at `.claude/skills/cultivars/SKILL.md`. Agents that load it get triggering criteria tuned to grower-scientist questions, routing guidance for all 28 tools, and explicit caveats about which plant genomes are open vs. paywalled.
+A Claude Code skill lives at `.claude/skills/cultivars/SKILL.md`. Agents that load it get triggering criteria tuned to grower-scientist questions, routing guidance for all 35 tools, and explicit caveats about which plant genomes are open vs. paywalled.
 
 ## Data sources
 
@@ -274,7 +288,7 @@ All free. All public. All maintained by people doing real public-sector science.
 
 ## License & lineage
 
-This is a fork of [Goodfire's EVEE MCP](https://github.com/goodfire-ai/evee-mcp) (human ClinVar variants via Evo 2 foundation model embeddings). The structural design — FastMCP, `.claude/skills/`, the `@mcp.tool()` decorator pattern, the SKILL.md "Gotchas" convention — carries through. The data, semantics, and 28 tools are entirely new.
+This is a fork of [Goodfire's EVEE MCP](https://github.com/goodfire-ai/evee-mcp) (human ClinVar variants via Evo 2 foundation model embeddings). The structural design — FastMCP, `.claude/skills/`, the `@mcp.tool()` decorator pattern, the SKILL.md "Gotchas" convention — carries through. The data, semantics, and 35 tools are entirely new.
 
 **Two licenses, deliberately:**
 - **Code** — Apache-2.0 ([LICENSE](LICENSE)), consistent with the upstream EVEE MCP lineage and the org's free-software ethos.
