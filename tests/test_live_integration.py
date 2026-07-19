@@ -29,7 +29,8 @@ pytestmark = pytest.mark.skipif(
 
 def test_live_lookup_gene_arabidopsis():
     out = server.lookup_gene("PHYB", species="arabidopsis_thaliana")
-    assert out.get("id", "").startswith("AT") or out.get("error")
+    # lookup_gene returns the Ensembl stable ID under `gene_id` (e.g. AT2G18790).
+    assert out.get("gene_id", "").startswith("AT") or out.get("error")
 
 
 def test_live_list_plant_species():
@@ -42,7 +43,8 @@ def test_live_list_plant_species():
 def test_live_uniprot_thcas():
     # THCAS (Cannabis) is curated in UniProt even though it's not in Ensembl.
     out = server.lookup_uniprot_entry("Q8GTB6")
-    assert out.get("accession") == "Q8GTB6" or out.get("error")
+    # lookup_uniprot_entry returns the accession under `uniprot_id`.
+    assert out.get("uniprot_id") == "Q8GTB6" or out.get("error")
 
 
 def test_live_pubmed_search():
