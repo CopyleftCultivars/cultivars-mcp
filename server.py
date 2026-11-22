@@ -974,13 +974,15 @@ def _wright_fst(p1: float, p2: float) -> float:
     """Wright's Fst for a biallelic locus between two equally-weighted subpops.
 
     p1, p2 = focal-allele frequency in each subpopulation. Fst = (Ht - Hs) / Ht,
-    where Hs is the mean within-subpop heterozygosity and Ht the total.
+    where Hs is the mean within-subpop expected heterozygosity 2p(1-p) and Ht
+    the total. Equivalent to var(p) / (p_bar * (1 - p_bar)).
     """
     p_bar = (p1 + p2) / 2
     h_t = 2 * p_bar * (1 - p_bar)
     if h_t == 0:
         return 0.0
-    h_s = (p1 * (1 - p1) + p2 * (1 - p2)) / 2
+    # Mean of 2p(1-p) over the two subpops: (2*p1*(1-p1) + 2*p2*(1-p2)) / 2.
+    h_s = p1 * (1 - p1) + p2 * (1 - p2)
     return round((h_t - h_s) / h_t, 4)
 
 
@@ -4310,13 +4312,21 @@ def estimate_gwas_power(
     where, for the standardised additive model, h2 = 2 * MAF * (1 - MAF) * effect^2,
     alpha = 0.05 / (genome-wide SNP count), and beta = 0.20 (80% power).
 
+    The loci here are specified by variance explained (h2 = 10% and 5%), and the
+    test's non-centrality is N * h2, so the required N does not depend on MAF.
+    MAF only enters when converting h2 to a per-allele effect, which is what
+    `maf` is used for: the result reports the per-allele effect (in phenotypic
+    SD units) that each h2 implies at that MAF. A rarer allele needs a larger
+    per-allele effect to explain the same variance.
+
     Args:
         trait_category: Atlas or organellar trait category.
         species: Ensembl species string (sets the SNP count / multiple-testing burden).
         n_observations: Current sample size. If omitted, pulled live from the
             community ledger via query_community_phenotypes.
         target_gene: Optional gene of interest (annotation only).
-        maf: Assumed minor-allele frequency for the formula (default 0.25).
+        maf: Assumed minor-allele frequency (default 0.25). Sets the implied
+            per-allele effect reported for each locus; does not change N.
     """
     species = _normalize_species(species)
 
@@ -4344,6 +4354,10 @@ def estimate_gwas_power(
 
     def required_n(h2: float) -> int:
         return math.ceil((z_alpha2 + z_beta) ** 2 / h2)
+
+    def per_allele_effect(h2: float) -> float:
+        # Invert h2 = 2 * MAF * (1 - MAF) * effect^2.
+        return round(math.sqrt(h2 / (2 * maf * (1 - maf))), 4)
 
     large_h2, medium_h2 = 0.10, 0.05
     n_large = required_n(large_h2)
@@ -4379,10 +4393,22 @@ def estimate_gwas_power(
             "conservative_snp_estimate": conservative_snp_estimate,
         },
         "required_observations": {
-            "large_effect_locus": {"variance_explained": large_h2, "n": n_large},
-            "medium_effect_locus": {"variance_explained": medium_h2, "n": n_medium},
+            "large_effect_locus": {
+                "variance_explained": large_h2,
+                "n": n_large,
+                "implied_per_allele_effect_sd": per_allele_effect(large_h2),
+            },
+            "medium_effect_locus": {
+                "variance_explained": medium_h2,
+                "n": n_medium,
+                "implied_per_allele_effect_sd": per_allele_effect(medium_h2),
+            },
         },
         "formula": "required_n ≈ (z_{alpha/2} + z_{beta})^2 / h2,  h2 = 2·MAF·(1-MAF)·effect^2,  alpha = 0.05 / SNP_count",
+        "maf_note": (
+            "N depends only on the variance explained. MAF sets the per-allele "
+            "effect that variance implies, reported as implied_per_allele_effect_sd."
+        ),
         "interpretation": {
             "large_effect": gap_message(n_large, "large-effect (SUB1A-scale, ~10% variance)"),
             "medium_effect": gap_message(n_medium, "medium-effect (~5% variance)"),
