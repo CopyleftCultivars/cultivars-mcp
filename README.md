@@ -1,5 +1,7 @@
 # Cultivars MCP — Plant Genomics for the Commons
 
+<!-- mcp-name: io.github.CopyleftCultivars/cultivars-mcp -->
+
 > **Tooling for grower-scientists, heritage breeders, and natural-farming researchers** working with the open plant-genomics commons. Live integration with **5 public databases**: Ensembl Plants, UniProt, Europe PMC, STRING-db, and Medicinal Genomics Kannapedia.
 
 Part of the [Copyleft Cultivars](https://github.com/CopyleftCultivars) ecosystem alongside [TinyLLamaFarmer](https://github.com/CopyleftCultivars/TinyLLamaFarmer) (offline natural-farming AI) and [gemma4-natural-farming](https://huggingface.co/CopyleftCultivars/gemma4-natural-farming-gguf) (open-weight KNF/JADAM model).
