@@ -171,40 +171,63 @@ pytest tests/ -v                              # mocked, no network — fast
 CULTIVARS_LIVE_TESTS=1 pytest tests/test_live_integration.py -v
 ```
 
-**164 unit tests** using `httpx.MockTransport` (no live network), run in ~1s — covering the genomics tools, the phenotype ledger, the hash-chain + OpenTimestamps anchoring (tamper-detection and offline-fallback paths), the Field Book / BIMS importer, and the registered MCP tool surface. GitHub Actions runs them on Python 3.10 / 3.11 / 3.12 on every PR. A separate **nightly** workflow (`live-integration.yml`) runs the opt-in live smoke suite against the real databases so upstream outages and format changes surface on a schedule rather than in PR CI.
+**172 unit tests** using `httpx.MockTransport` (no live network), run in ~1s — covering the genomics tools, the phenotype ledger, the hash-chain + OpenTimestamps anchoring (tamper-detection and offline-fallback paths), the Field Book / BIMS importer, and the registered MCP tool surface. GitHub Actions runs them on Python 3.10 / 3.11 / 3.12 on every PR. A separate **nightly** workflow (`live-integration.yml`) runs the opt-in live smoke suite against the real databases so upstream outages and format changes surface on a schedule rather than in PR CI.
 
 ## Usage
 
 Requires Python 3.10+ and [uv](https://docs.astral.sh/uv/).
 
+### Run it
+
+One command, nothing to clone:
+
 ```bash
-git clone https://github.com/CopyleftCultivars/evee-mcp-fork-for-plants.git
-cd evee-mcp-fork-for-plants
+uvx --from git+https://github.com/CopyleftCultivars/cultivars-mcp cultivars-mcp
+```
+
+The server talks MCP over stdio, so on its own it waits for a client. Add it to your MCP client's config. For Claude Desktop that is `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "cultivars": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/CopyleftCultivars/cultivars-mcp", "cultivars-mcp"]
+    }
+  }
+}
+```
+
+For Claude Code:
+
+```bash
+claude mcp add cultivars -- uvx --from git+https://github.com/CopyleftCultivars/cultivars-mcp cultivars-mcp
+```
+
+The phenotype ledger tools write to `./phenotypes` under the directory the client starts the server in. Set `CULTIVARS_LEDGER_DIR` to put it somewhere else.
+
+### From a clone
+
+```bash
+git clone https://github.com/CopyleftCultivars/cultivars-mcp.git
+cd cultivars-mcp
 uv sync
 ```
 
-### Claude Code
-
-The repo ships a `.mcp.json`; opening the directory triggers the permission prompt:
-
-```bash
-claude
-```
-
-### Claude Desktop
-
-Add to `claude_desktop_config.json`:
+The repo ships a `.mcp.json`, so running `claude` in the directory triggers the permission prompt. For Claude Desktop from a clone:
 
 ```json
 {
   "mcpServers": {
     "cultivars": {
       "command": "uv",
-      "args": ["run", "--directory", "/absolute/path/to/evee-mcp-fork-for-plants", "python3", "server.py"]
+      "args": ["run", "--directory", "/absolute/path/to/cultivars-mcp", "cultivars-mcp"]
     }
   }
 }
 ```
+
+The server needs `mcp` 1.x. It is pinned to `mcp<2` because mcp 2.0 renamed `FastMCP`, and the port is tracked separately.
 
 ## Example workflows (see [USER_GUIDE.md](docs/USER_GUIDE.md) for full recipes)
 
