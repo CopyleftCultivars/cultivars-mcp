@@ -30,3 +30,30 @@ jobs:
 
       - name: Import sanity check
         run: python -c "import server; import asyncio; print(f'{len(asyncio.run(server.mcp.list_tools()))} tools registered')"
+
+      - name: Build the wheel and run it from a clean venv
+        run: |
+          pip wheel . --no-deps -w dist
+          python -m venv /tmp/wheel-venv
+          /tmp/wheel-venv/bin/pip install dist/*.whl
+          cd /tmp
+          /tmp/wheel-venv/bin/python - <<'PY'
+          import asyncio, json
+          from mcp import ClientSession, StdioServerParameters
+          from mcp.client.stdio import stdio_client
+
+          async def main():
+              params = StdioServerParameters(command="/tmp/wheel-venv/bin/cultivars-mcp", args=[])
+              async with stdio_client(params) as (r, w):
+                  async with ClientSession(r, w) as s:
+                      await s.initialize()
+                      tools = (await s.list_tools()).tools
+                      print(f"{len(tools)} tools from the installed wheel")
+                      assert len(tools) == 35, len(tools)
+                      res = await s.call_tool("list_orphan_crop_requests", {})
+                      data = json.loads(res.content[0].text)
+                      assert data["ok"] and data["request_count"] > 0, data
+
+          asyncio.run(main())
+          PY
+          /tmp/wheel-venv/bin/python -c "import server; assert server._ATLAS_EVIDENCE, 'atlas_evidence.json missing from wheel'"
