@@ -2,6 +2,7 @@
 name = "cultivars-mcp"
 version = "0.1.0"
 description = "MCP server for plant genomics research — gene lookup, variant effect prediction, orthology, sequence retrieval, and a curated atlas of natural-farming-relevant gene families via the Ensembl Plants REST API. Part of the Copyleft Cultivars ecosystem."
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "mcp[cli]>=1.0.0,<2",

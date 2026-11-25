@@ -1,0 +1,30 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.CopyleftCultivars/cultivars-mcp",
+  "title": "Cultivars MCP",
+  "description": "Plant genomics for growers and researchers: genes, variants, orthologs, and a crop trait atlas",
+  "version": "0.1.0",
+  "websiteUrl": "https://copyleftcultivars.org",
+  "repository": {
+    "url": "https://github.com/CopyleftCultivars/cultivars-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "cultivars-mcp",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "CULTIVARS_LEDGER_DIR",
+          "description": "Directory for the community phenotype ledger. Defaults to ./phenotypes under the working directory.",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}
