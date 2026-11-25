@@ -4,6 +4,26 @@ All notable changes to the Cultivars MCP server. Format adapted from [Keep a Cha
 
 The unreleased section reflects work on the `refactor/plant-genomics-cultivars` branch (this PR).
 
+## [Unreleased] — Calculation fixes (results differ from 0.1.0)
+
+### Fixed
+
+- **Fst was overstated.** `_wright_fst`, used for the population-differentiation
+  note in `get_variant(population_context=True)`, averaged p(1-p) instead of
+  2p(1-p) for within-subpopulation heterozygosity, so Hs was half its true value.
+  Identical subpopulations at 0.5 returned 0.5 instead of 0. Changes on the test
+  cases: (0.5, 0.5) 0.5 → 0, (0.2, 0.8) 0.68 → 0.36, (0.8, 0.05) 0.7877 → 0.5754,
+  (0, 1) unchanged at 1. Some alleles previously flagged as strongly
+  differentiated (Fst > 0.3) will now get the "modest differentiation" note.
+
+### Changed
+
+- **`estimate_gwas_power` `maf` now has a visible effect.** It was validated and
+  echoed but never used. The required sample sizes are unchanged and correct: the
+  loci are specified by variance explained, and the required N depends only on
+  that. `maf` now sets the per-allele effect each locus implies, reported as
+  `implied_per_allele_effect_sd`, with a `maf_note` explaining it.
+
 ## [Unreleased] — Cryptographic ledger, field-data ingestion & researcher intro
 
 Turns the phenotype ledger from a pile of YAML files into a tamper-evident,

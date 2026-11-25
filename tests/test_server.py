@@ -1630,6 +1630,20 @@ def test_estimate_gwas_power_conservative_for_unknown_species():
     assert out["assumptions"]["conservative_snp_estimate"] is True
 
 
+def test_estimate_gwas_power_n_independent_of_maf_effect_scales():
+    outs = [
+        server.estimate_gwas_power("submergence_tolerance", "oryza_sativa", n_observations=12, maf=m)
+        for m in (0.05, 0.25, 0.5)
+    ]
+    ns = {o["required_observations"]["large_effect_locus"]["n"] for o in outs}
+    assert len(ns) == 1  # h2 fixes N; MAF does not change it
+    effects = [o["required_observations"]["large_effect_locus"]["implied_per_allele_effect_sd"] for o in outs]
+    # h2 = 0.10 at MAF 0.5: sqrt(0.10 / (2 * 0.25)) = sqrt(0.2) = 0.4472
+    assert effects[2] == 0.4472
+    # Rarer allele -> larger per-allele effect for the same variance explained.
+    assert effects[0] > effects[1] > effects[2]
+
+
 def test_estimate_gwas_power_bad_maf():
     out = server.estimate_gwas_power("drought_tolerance", "oryza_sativa", maf=0.9)
     assert out["ok"] is False
@@ -1650,6 +1664,18 @@ def test_wright_fst_monomorphic_is_zero():
     assert server._wright_fst(0.0, 0.0) == 0.0
     # Maximal differentiation -> Fst 1.0
     assert server._wright_fst(0.0, 1.0) == 1.0
+
+
+def test_wright_fst_equal_frequencies_is_zero():
+    # Identical subpopulations are undifferentiated at any frequency.
+    assert server._wright_fst(0.5, 0.5) == 0.0
+    assert server._wright_fst(0.3, 0.3) == 0.0
+
+
+def test_wright_fst_hand_worked_value():
+    # p_bar = 0.5, Ht = 0.5, Hs = 2(0.2)(0.8) = 0.32, Fst = 0.18 / 0.5 = 0.36.
+    # Same as var(p) / (p_bar(1 - p_bar)) = 0.09 / 0.25.
+    assert server._wright_fst(0.2, 0.8) == 0.36
 
 
 # ---------------------------------------------------------------------------
