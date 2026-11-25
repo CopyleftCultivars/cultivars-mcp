@@ -173,7 +173,7 @@ pytest tests/ -v                              # mocked, no network — fast
 CULTIVARS_LIVE_TESTS=1 pytest tests/test_live_integration.py -v
 ```
 
-**172 unit tests** using `httpx.MockTransport` (no live network), run in ~1s — covering the genomics tools, the phenotype ledger, the hash-chain + OpenTimestamps anchoring (tamper-detection and offline-fallback paths), the Field Book / BIMS importer, and the registered MCP tool surface. GitHub Actions runs them on Python 3.10 / 3.11 / 3.12 on every PR. A separate **nightly** workflow (`live-integration.yml`) runs the opt-in live smoke suite against the real databases so upstream outages and format changes surface on a schedule rather than in PR CI.
+**175 unit tests** using `httpx.MockTransport` (no live network), run in ~1s — covering the genomics tools, the phenotype ledger, the hash-chain + OpenTimestamps anchoring (tamper-detection and offline-fallback paths), the Field Book / BIMS importer, and the registered MCP tool surface. GitHub Actions runs them on Python 3.10 / 3.11 / 3.12 on every PR. A separate **nightly** workflow (`live-integration.yml`) runs the opt-in live smoke suite against the real databases so upstream outages and format changes surface on a schedule rather than in PR CI.
 
 ## Usage
 
